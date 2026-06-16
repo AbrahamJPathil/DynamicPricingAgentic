@@ -1,7 +1,7 @@
 """
 Lightweight Kafka publisher for the pricing orchestrator agent.
 Same pattern as kafka_publisher.py / competitor_kafka_publisher.py,
-just pointed at the final_prices topic.
+just pointed at the final-prices topic.
 
 Usage:
     from final_prices_kafka_publisher import publish_proposal, flush
@@ -17,7 +17,7 @@ from typing import Optional
 from confluent_kafka import Producer
 
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-TOPIC = "final_prices"
+TOPIC = "final-prices"
 
 _producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
@@ -35,7 +35,7 @@ def _delivery_report(err, msg) -> None:
 
 def publish_proposal(payload: dict, key: Optional[str] = None) -> None:
     """
-    Serializes payload to JSON and produces it onto the final_prices topic.
+    Serializes payload to JSON and produces it onto the final-prices topic.
     This call is non-blocking - the message is buffered and sent asynchronously.
     """
     _producer.produce(

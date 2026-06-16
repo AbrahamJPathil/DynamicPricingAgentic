@@ -7,7 +7,7 @@ exit), this agent is a long-running Kafka CONSUMER. It subscribes to both
 upstream topics, keeps the latest known recommendation per (sku, agent_id)
 in memory, and every time either upstream agent publishes something new for
 a SKU, it re-synthesizes a single final pricing decision for that SKU and
-publishes it to the "final_prices" topic.
+publishes it to the "final-prices" topic.
 
 Graph nodes (run once per incoming Kafka message):
     call_llm -> build_output -> END
@@ -262,7 +262,7 @@ Synthesize a single final pricing decision for this SKU."""
 
 # -- Node 2: build_output ----------------------------------------------------------
 def build_output_node(state: AgentState) -> AgentState:
-    """Assembles the final payload, logs it, and publishes it to the final_prices topic."""
+    """Assembles the final payload, logs it, and publishes it to the final-prices topic."""
     sku = state["sku"]
     llm = state["llm_response"]
     inventory_data = state["inventory_data"]
@@ -348,7 +348,7 @@ def main():
 
     print(f"\n[main] Pricing orchestrator running")
     print(f"[main] Subscribed to: {SOURCE_TOPICS}")
-    print(f"[main] Publishing to: final_prices")
+    print(f"[main] Publishing to: final-prices")
     print(f"[main] Waiting for messages ... (Ctrl+C to stop)\n")
 
     try:

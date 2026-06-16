@@ -1,0 +1,6 @@
+.venv/
+agents/inventory/logs
+agents/inventory/proposals.jsonl
+agents/inventory/validations.jsonl
+api/virtual_clock
+.env

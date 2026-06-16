@@ -25,6 +25,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from kafka_publisher import publish_proposal, flush as kafka_flush
+
 # -- Audit log paths ------------------------------------------------------------
 PROPOSAL_LOG = "proposals.jsonl"
 VALIDATION_LOG = "validations.jsonl"
@@ -626,6 +628,11 @@ def build_output_node(state: AgentState) -> AgentState:
         PROPOSAL_LOG,
     )
 
+    # -- Publish to Kafka (inventory-agent topic) --------------------------------
+    # Non-blocking - the message is handed to the producer's internal buffer
+    # and sent asynchronously. flush() in main() guarantees delivery before exit.
+    publish_proposal(output, key=row["sku_id"])
+
     flag = " [WARNING]  [FALLBACK - human review required]" if is_fallback else ""
     print(f"[build_output] [{row['sku_id']}] Proposal ready{flag}")
     return state
@@ -779,6 +786,9 @@ def main():
     print(f"[main]  Proposal log   -> {PROPOSAL_LOG}")
     print(f"[main]  Validation log -> {VALIDATION_LOG}")
     print(f"[main] {sep}\n")
+
+    # -- Ensure every buffered Kafka message is actually sent before exiting ---
+    kafka_flush()
 
     print(f"[OK] Done - {len(final_state['results'])} proposal(s) generated\n")
     for output in final_state["results"]:

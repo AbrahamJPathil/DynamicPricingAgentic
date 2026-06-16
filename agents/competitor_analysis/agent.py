@@ -6,6 +6,9 @@ from typing import TypedDict, Optional
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from langgraph.graph import StateGraph
+from pydantic import BaseModel, Field, ValidationError
+
+from competitor_kafka_publisher import publish_proposal, flush as kafka_flush
 
 load_dotenv()
 
@@ -251,6 +254,85 @@ def _failed_entry(sku: str, our_price: float, headline: str, reasoning: str) -> 
         },
     }
 
+
+# ---------------------------------------------
+#  STRICT KAFKA OUTPUT SCHEMA  (external contract)
+# ---------------------------------------------
+# This is what actually gets published to the "competitor-agent" topic. It's
+# deliberately thinner than the report entry above - metrics_evaluated and
+# the full justification stay in pricing_report.json; only agent_id / sku /
+# recommendation / rationale go out on the wire.
+class KafkaRecommendation(BaseModel):
+    suggested_modifier: float = Field(
+        ge=-1.0,
+        le=5.0,
+        description=(
+            "Signed fractional price change, e.g. -0.05 for a 5% discount, "
+            "+0.10 for a 10% surcharge."
+        ),
+    )
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class KafkaProposal(BaseModel):
+    agent_id: str
+    sku: str
+    recommendation: KafkaRecommendation
+    rationale: str = Field(min_length=10)
+
+
+def _modifier_to_delta(price_modifier: float) -> float:
+    """
+    Converts the multiplier representation (comp_price / our_price, e.g. 0.65)
+    into the signed delta the Kafka schema expects (-0.35). A modifier of 1.0
+    (HOLD) maps to a delta of 0.0 - no change.
+    """
+    return round(price_modifier - 1.0, 4)
+
+
+def _build_rationale(headline: str, reasoning: str) -> str:
+    """Joins the short headline and the longer reasoning into one readable string for the UI."""
+    headline = headline.strip()
+    if headline and headline[-1] not in ".!?":
+        headline += "."
+    return f"{headline} {reasoning.strip()}"
+
+
+def build_kafka_payload(entry: dict) -> dict:
+    """
+    Builds and validates the strict external payload published to Kafka:
+        {agent_id, sku, recommendation: {suggested_modifier, confidence}, rationale}
+
+    Handles both COMPLETED entries (full proposal) and ERROR entries (no
+    competitor price found, proposal=None). For ERROR entries we publish
+    suggested_modifier=0.0 / confidence=0.0 - "confidence based on data
+    availability" means zero data in, zero confidence and no recommended
+    change out, rather than skipping the SKU on the topic entirely.
+    """
+    sku = entry["metrics_evaluated"]["sku"]
+    justification = entry["justification"]
+
+    if entry["proposal"] is None:
+        suggested_modifier = 0.0
+        confidence = 0.0
+    else:
+        suggested_modifier = _modifier_to_delta(entry["proposal"]["price_modifier"])
+        confidence = round(entry["proposal"]["confidence_score"], 2)
+
+    payload = KafkaProposal(
+        agent_id=entry["agent_id"],
+        sku=sku,
+        recommendation=KafkaRecommendation(
+            suggested_modifier=suggested_modifier,
+            confidence=confidence,
+        ),
+        rationale=_build_rationale(
+            justification["headline"], justification["detailed_reasoning"]
+        ),
+    )
+    return payload.model_dump()
+
+
 def analyze(state: AgentState) -> AgentState:
     """Compare our prices vs Kroger and generate proposals for each SKU."""
     logger.info("[NODE 4/5]   Analysing prices and generating proposals ...")
@@ -300,6 +382,19 @@ def analyze(state: AgentState) -> AgentState:
             )
 
         results.append(entry)
+
+        # -- Publish to Kafka (competitor-agent topic) --------------------------
+        # Only the strict external contract goes on the wire - the full entry
+        # above (with metrics_evaluated, raw competitor price, etc.) stays in
+        # pricing_report.json. Non-blocking; flush() in main() guarantees
+        # delivery before exit.
+        try:
+            kafka_payload = build_kafka_payload(entry)
+            publish_proposal(kafka_payload, key=sku)
+        except ValidationError as e:
+            logger.warning(f"{sku}: Kafka payload failed schema validation - not published")
+            for error in e.errors():
+                logger.warning(f"  field={error['loc']}  msg={error['msg']}")
 
     return {**state, "results": results, "errors": errors}
 
@@ -385,6 +480,9 @@ if __name__ == "__main__":
     }
 
     final_state = app.invoke(initial_state)
+
+    # -- Ensure every buffered Kafka message is actually sent before exiting --
+    kafka_flush()
 
     logger.info("FINAL JSON OUTPUT")
     logger.info(json.dumps(final_state["results"], indent=2))

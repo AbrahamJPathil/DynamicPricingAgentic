@@ -62,7 +62,7 @@ Respond ONLY with a valid JSON object using exactly this schema:
 No preamble, no markdown fences, only the JSON object."""
 
 
-# -- Pydantic output schema -----------------------------------------------------
+# -- Pydantic output schema (internal LLM contract) ------------------------------
 class LLMProposal(BaseModel):
     suggested_action: Literal["DISCOUNT", "HOLD", "SURCHARGE"]
     price_modifier: float = Field(ge=0.10, le=1.5)
@@ -130,6 +130,31 @@ class LLMProposal(BaseModel):
                 "suggested_action is DISCOUNT but price_modifier >= 1.0 - contradictory."
             )
         return self
+
+
+# -- Strict Kafka output schema (external contract) ------------------------------
+# This is what actually gets published to the "inventory-agent" topic. It is
+# deliberately much thinner than LLMProposal - the rich metrics (loss figures,
+# urgency, days_to_expiry, etc.) stay in proposals.jsonl/validations.jsonl for
+# debugging; only agent_id/sku/recommendation/rationale go out on the wire,
+# since that's the contract downstream consumers (and the UI) actually depend on.
+class KafkaRecommendation(BaseModel):
+    suggested_modifier: float = Field(
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Signed fractional price change, e.g. -0.05 for a 5% discount, "
+            "+0.10 for a 10% surcharge."
+        ),
+    )
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class KafkaProposal(BaseModel):
+    agent_id: str
+    sku: str
+    recommendation: KafkaRecommendation
+    rationale: str = Field(min_length=10)
 
 
 # -- LLM response parser --------------------------------------------------------
@@ -562,6 +587,46 @@ Recommend a price modifier to clear stock before expiry."""
     return state
 
 
+# -- Kafka payload builder --------------------------------------------------------
+def _modifier_to_delta(price_modifier: float) -> float:
+    """
+    Converts the internal multiplier representation (0.65 = 65% of current
+    price, i.e. a 35% discount) into the signed delta the Kafka schema
+    expects (-0.35). A multiplier of 1.0 maps to a delta of 0.0 - no change.
+    """
+    return round(price_modifier - 1.0, 2)
+
+
+def _build_rationale(headline: str, reasoning: str) -> str:
+    """Joins the short headline and the longer reasoning into one readable string for the UI."""
+    headline = headline.strip()
+    if headline and headline[-1] not in ".!?":
+        headline += "."
+    return f"{headline} {reasoning.strip()}"
+
+
+def build_kafka_payload(row: dict, llm: dict, agent_id: str) -> dict:
+    """
+    Builds and validates the strict external payload published to Kafka:
+        {agent_id, sku, recommendation: {suggested_modifier, confidence}, rationale}
+
+    Raises pydantic.ValidationError if the proposal can't be mapped onto the
+    external contract - acts as a final safety net before anything leaves the
+    process, on top of the LLMProposal/fallback_proposal checks that already
+    ran upstream in call_llm_node.
+    """
+    payload = KafkaProposal(
+        agent_id=agent_id,
+        sku=row["sku_id"],
+        recommendation=KafkaRecommendation(
+            suggested_modifier=_modifier_to_delta(llm["price_modifier"]),
+            confidence=round(llm["confidence_score"], 2),
+        ),
+        rationale=_build_rationale(llm["headline"], llm["detailed_reasoning"]),
+    )
+    return payload.model_dump()
+
+
 # -- Node 7: build_output -------------------------------------------------------
 def build_output_node(state: AgentState) -> AgentState:
     """Assembles the final JSON proposal, appends to results, and writes proposal log."""
@@ -603,7 +668,7 @@ def build_output_node(state: AgentState) -> AgentState:
     }
     state["results"].append(output)
 
-    # -- Write proposal log -----------------------------------------------------
+    # -- Write proposal log (full internal detail, for audit/debugging) ---------
     _write_log(
         {
             "log_type": "PROPOSAL",
@@ -629,9 +694,20 @@ def build_output_node(state: AgentState) -> AgentState:
     )
 
     # -- Publish to Kafka (inventory-agent topic) --------------------------------
-    # Non-blocking - the message is handed to the producer's internal buffer
-    # and sent asynchronously. flush() in main() guarantees delivery before exit.
-    publish_proposal(output, key=row["sku_id"])
+    # Only the strict external contract goes on the wire - the rich internal
+    # metrics above stay in proposals.jsonl. Non-blocking - the message is
+    # handed to the producer's internal buffer and sent asynchronously;
+    # flush() in main() guarantees delivery before exit.
+    try:
+        kafka_payload = build_kafka_payload(row, llm, output["agent_id"])
+        publish_proposal(kafka_payload, key=row["sku_id"])
+    except ValidationError as e:
+        print(
+            f"[build_output] [{row['sku_id']}] [WARNING]  "
+            f"Kafka payload failed schema validation - not published"
+        )
+        for error in e.errors():
+            print(f"  field={error['loc']}  msg={error['msg']}")
 
     flag = " [WARNING]  [FALLBACK - human review required]" if is_fallback else ""
     print(f"[build_output] [{row['sku_id']}] Proposal ready{flag}")
@@ -665,7 +741,7 @@ def build_graph() -> StateGraph:
     graph = StateGraph(AgentState)
 
     graph.add_node("load_csv", load_csv_node)
-    graph.add_node("sort_by_urgency", sort_by_urgency_node)  # <- new
+    graph.add_node("sort_by_urgency", sort_by_urgency_node)
     graph.add_node("check_perishable", check_perishable_node)
     graph.add_node("compute_expiry", compute_expiry_node)
     graph.add_node("compute_loss", compute_loss_node)
@@ -675,8 +751,8 @@ def build_graph() -> StateGraph:
     graph.add_node("advance_row", advance_row_node)
 
     graph.set_entry_point("load_csv")
-    graph.add_edge("load_csv", "sort_by_urgency")  # <- new edge
-    graph.add_edge("sort_by_urgency", "check_perishable")  # <- new edge
+    graph.add_edge("load_csv", "sort_by_urgency")
+    graph.add_edge("sort_by_urgency", "check_perishable")
 
     graph.add_conditional_edges(
         "check_perishable",

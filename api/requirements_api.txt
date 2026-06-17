@@ -1,0 +1,20 @@
+# --- API & Database (FastAPI + Supabase) ---
+fastapi
+uvicorn
+supabase
+
+# --- Event Streaming ---
+confluent-kafka
+
+# --- AI & Orchestration (Gemini + LangGraph) ---
+langchain-core
+langchain-google-genai
+langgraph
+
+# --- Data Validation & Utilities ---
+pydantic
+python-dotenv
+
+# --- Competitor Agent Specifics ---
+requests
+pandas

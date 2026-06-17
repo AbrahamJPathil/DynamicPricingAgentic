@@ -42,6 +42,49 @@ def _write_log(record: dict, path: str) -> None:
         f.write(json.dumps(record) + "\n")
 
 
+# -- Pricing history (read from the same JSONL audit log build_output_node writes to) --
+def _load_recent_history(sku: str, limit: int = 3) -> List[dict]:
+    """
+    Reads proposals.jsonl and returns up to the last `limit` prior proposals
+    for this SKU, oldest first. This is purely a local-file read - it has no
+    dependency on Kafka, so it keeps working unchanged regardless of which
+    broker/topic build_output_node is publishing to.
+
+    Grounds the LLM prompt in this SKU's own track record so it can't
+    hand-wave with the same generic justification every run - if a SKU has
+    been discounted three times running and stock still hasn't moved, the
+    model should say that explicitly instead of repeating boilerplate.
+    """
+    if not os.path.exists(PROPOSAL_LOG):
+        return []
+    history = []
+    with open(PROPOSAL_LOG) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("sku_id") == sku:
+                history.append(record)
+    return history[-limit:]
+
+
+def _format_history(history: List[dict]) -> str:
+    """Renders prior proposals as a prompt block, or states plainly that none exist."""
+    if not history:
+        return "No prior pricing history for this SKU - this is the first time it has been evaluated."
+    lines = [
+        f"- {r['timestamp']}: action={r['suggested_action']}, modifier={r['price_modifier']}, "
+        f"confidence={r['confidence_score']}, units_at_risk={r['units_at_risk']}, "
+        f"days_to_expiry={r['days_to_expiry']}, fallback_used={r['fallback_used']}"
+        for r in history
+    ]
+    return "Prior pricing history for this SKU, most recent last:\n" + "\n".join(lines)
+
+
 # -- System prompt --------------------------------------------------------------
 SYSTEM_PROMPT = """You are a pricing agent for a retail grocery store.
 You will be given inventory data for a perishable product that is at risk of expiring unsold.
@@ -50,16 +93,47 @@ Your job is to recommend an ideal selling price that:
 2. Never goes below the cost_price
 3. Minimises total loss compared to loss_if_no_action
 
+Hard rule on suggested_action, based on the days_to_expiry value you are given:
+- If days_to_expiry is less than 3, you MUST set suggested_action to "DISCOUNT" -
+  a markdown is required regardless of confidence, demand, or any other factor.
+- If days_to_expiry is 3 or more, "DISCOUNT" is NOT allowed. Choose either
+  "SURCHARGE" (raise the price) or "HOLD" (keep the price unchanged), whichever
+  better fits the demand and risk numbers you were given.
+
+You will also be given this SKU's recent pricing history, if any exists.
+Use it to ground your reasoning: if this SKU has been discounted before and
+stock is still piling up, say so explicitly with the actual numbers from
+that history instead of repeating a generic justification. If no history is
+given, state plainly that this is the first evaluation for this SKU rather
+than inventing a trend that doesn't exist.
+
+Be concrete, never vague. Do not use hand-wavy phrases like "significant
+risk", "moderate confidence", "some units", "a portion of stock", "various
+factors", or "relatively high/low". Every sentence in detailed_reasoning
+must cite at least one specific number you were actually given (units,
+days, dollar amounts, percentages, or a value from the history block).
+
 Respond ONLY with a valid JSON object using exactly this schema:
 {
-  "suggested_action": "DISCOUNT",
-  "price_modifier": <float between 0.10 and 1.0, e.g. 0.65 means 65% of current price>,
+  "suggested_action": <"DISCOUNT" | "HOLD" | "SURCHARGE">,
+  "price_modifier": <float, fraction of current price - meaning depends on suggested_action:
+    DISCOUNT -> between 0.10 and 0.99, e.g. 0.65 means 65% of current price (35% off);
+    HOLD -> exactly 1.0, no price change;
+    SURCHARGE -> between 1.01 and 1.5, e.g. 1.10 means a 10% price increase>,
   "confidence_score": <float between 0.0 and 1.0>,
   "urgency": <"IMMEDIATE" | "HIGH" | "MEDIUM">,
   "headline": "<one line summary, minimum 10 characters>",
   "detailed_reasoning": "<two to three sentence explanation, minimum 30 characters>"
 }
 No preamble, no markdown fences, only the JSON object."""
+
+
+# -- Phrases that signal hand-wavy, non-numeric reasoning - shared blocklist ----
+_VAGUE_PHRASES = [
+    "significant risk", "moderate confidence", "some units", "a portion of",
+    "various factors", "a number of", "relatively high", "relatively low",
+    "a certain amount", "quite a bit", "fairly significant", "somewhat",
+]
 
 
 # -- Pydantic output schema (internal LLM contract) ------------------------------
@@ -99,6 +173,24 @@ class LLMProposal(BaseModel):
             )
         return v
 
+    @field_validator("detailed_reasoning")
+    @classmethod
+    def reasoning_not_vague(cls, v: str) -> str:
+        """
+        Deterministic backstop behind the system prompt's anti-vagueness
+        instruction - prompting alone doesn't guarantee compliance, so this
+        rejects known hand-wavy phrases and forces the rule-based fallback
+        instead of letting vague language reach build_output_node.
+        """
+        lowered = v.lower()
+        hit = next((p for p in _VAGUE_PHRASES if p in lowered), None)
+        if hit:
+            raise ValueError(
+                f'detailed_reasoning contains vague language ("{hit}") instead of '
+                f"citing specific numbers from the data provided."
+            )
+        return v
+
     # -- Cross-field validators -------------------------------------------------
 
     @model_validator(mode="after")
@@ -118,16 +210,22 @@ class LLMProposal(BaseModel):
     @model_validator(mode="after")
     def action_modifier_consistency(self) -> "LLMProposal":
         """
-        A SURCHARGE should never have modifier < 1.0.
+        A SURCHARGE should always have modifier > 1.0.
         A DISCOUNT should never have modifier >= 1.0.
+        A HOLD should always have modifier exactly 1.0.
         """
-        if self.suggested_action == "SURCHARGE" and self.price_modifier < 1.0:
+        if self.suggested_action == "SURCHARGE" and self.price_modifier <= 1.0:
             raise ValueError(
-                "suggested_action is SURCHARGE but price_modifier < 1.0 - contradictory."
+                "suggested_action is SURCHARGE but price_modifier <= 1.0 - contradictory."
             )
         if self.suggested_action == "DISCOUNT" and self.price_modifier >= 1.0:
             raise ValueError(
                 "suggested_action is DISCOUNT but price_modifier >= 1.0 - contradictory."
+            )
+        if self.suggested_action == "HOLD" and self.price_modifier != 1.0:
+            raise ValueError(
+                f"suggested_action is HOLD but price_modifier={self.price_modifier} != 1.0 - "
+                f"contradictory."
             )
         return self
 
@@ -139,6 +237,7 @@ class LLMProposal(BaseModel):
 # debugging; only agent_id/sku/recommendation/rationale go out on the wire,
 # since that's the contract downstream consumers (and the UI) actually depend on.
 class KafkaRecommendation(BaseModel):
+    action: Literal["DISCOUNT", "HOLD", "SURCHARGE"]
     suggested_modifier: float = Field(
         ge=-1.0,
         le=1.0,
@@ -222,18 +321,28 @@ def fallback_proposal(state: "AgentState") -> dict:
     # Higher risk ratio -> steeper discount, floored at recovery_floor
     base_modifier = round(max(1.0 - (risk_ratio * 0.6), recovery_floor), 2)
 
+    # Below 3 days: markdown required by policy. At 3+ days DISCOUNT isn't
+    # allowed, so hold the price rather than guess at a surcharge.
+    action = "DISCOUNT" if d < 3 else "HOLD"
+    modifier = base_modifier if d < 3 else 1.0
+
     return {
-        "suggested_action": "DISCOUNT",
-        "price_modifier": base_modifier,
+        "suggested_action": action,
+        "price_modifier": modifier,
         "confidence_score": 0.0,
         "urgency": state["urgency"],
         "headline": "Fallback proposal - LLM output failed validation",
         "detailed_reasoning": (
             f"Rule-based fallback applied. {state['units_at_risk']} units at risk "
-            f"with {d} days to expiry. Modifier {base_modifier} derived from "
-            f"risk ratio {risk_ratio:.2f}, floored at recovery rate "
-            f"{recovery_floor} (buyback={producer_buyback} + "
-            f"repurposing={repurposing}). Manual review required."
+            f"with {d} days to expiry. "
+            + (
+                f"Modifier {modifier} derived from risk ratio {risk_ratio:.2f}, "
+                f"floored at recovery rate {recovery_floor} (buyback={producer_buyback} + "
+                f"repurposing={repurposing})."
+                if d < 3
+                else "days_to_expiry >= 3 so no markdown applied per policy; price held unchanged."
+            )
+            + " Manual review required."
         ),
     }
 
@@ -437,6 +546,71 @@ def compute_expiry_node(state: AgentState) -> AgentState:
     return state
 
 
+# -- Node 3b: skip_no_risk -------------------------------------------------------
+def skip_no_risk_node(state: AgentState) -> AgentState:
+    """
+    Reached when units_at_risk <= 0 - the SKU has enough days_to_expiry relative
+    to its sales velocity that no pricing action is needed. No LLM call is made
+    (there's nothing to decide), but a deterministic HOLD message is still
+    published to Kafka so every perishable SKU has a record on the topic, not
+    just the ones that ended up at risk.
+    """
+    row = state["current_row"]
+    sku = row.get("sku_id", "UNKNOWN")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    llm = {
+        "suggested_action": "HOLD",
+        "price_modifier": 1.0,
+        "confidence_score": 1.0,
+        "urgency": "MEDIUM",
+        "headline": "No action needed - stock clears before expiry",
+        "detailed_reasoning": (
+            f"{row['avg_daily_units_sold']} units/day average sales against "
+            f"{row['stock_on_hand']} units on hand with {state['days_to_expiry']} "
+            f"days to expiry leaves no units at risk, so the price is held."
+        ),
+    }
+
+    _write_log(
+        {
+            "log_type": "PROPOSAL",
+            "run_id": state["run_id"],
+            "sku_id": sku,
+            "timestamp": timestamp,
+            "status": "NO_ACTION_NEEDED",
+            "urgency": llm["urgency"],
+            "suggested_action": llm["suggested_action"],
+            "price_modifier": llm["price_modifier"],
+            "confidence_score": llm["confidence_score"],
+            "loss_if_no_action": 0.0,
+            "units_at_risk": state["units_at_risk"],
+            "days_to_expiry": state["days_to_expiry"],
+            "recovery_floor": round(
+                float(row.get("producer_buyback_rate", 0.0))
+                + float(row.get("repurposing_recovery_rate", 0.0)),
+                4,
+            ),
+            "fallback_used": False,
+        },
+        PROPOSAL_LOG,
+    )
+
+    try:
+        kafka_payload = build_kafka_payload(row, llm, "inventory_perishability")
+        publish_proposal(kafka_payload, key=sku)
+    except ValidationError as e:
+        print(
+            f"[skip_no_risk] [{sku}] [WARNING]  "
+            f"Kafka payload failed schema validation - not published"
+        )
+        for error in e.errors():
+            print(f"  field={error['loc']}  msg={error['msg']}")
+
+    print(f"[skip_no_risk] [{sku}] No units at risk - HOLD published, no LLM call made")
+    return state
+
+
 # -- Node 4: compute_loss -------------------------------------------------------
 def compute_loss_node(state: AgentState) -> AgentState:
     """
@@ -485,6 +659,8 @@ def call_llm_node(state: AgentState) -> AgentState:
     row = state["current_row"]
     sku = row.get("sku_id", "UNKNOWN")
 
+    history_block = _format_history(_load_recent_history(sku))
+
     prompt = f"""Product: {row['product_name']}
 Category: {row['category']}
 Unit: {row['unit']}
@@ -496,6 +672,8 @@ Units at risk of expiry: {state['units_at_risk']}
 Cost price (floor): ${float(row['cost_price'])}
 Expiry loss rate: {state['expiry_loss_rate']}
 Loss if no action taken: ${state['loss_if_no_action']}
+
+{history_block}
 
 Recommend a price modifier to clear stock before expiry."""
 
@@ -534,8 +712,14 @@ Recommend a price modifier to clear stock before expiry."""
 
     # -- Parse and validate via Pydantic ---------------------------------------
     proposal = parse_llm_response(response.content)
-    fallback_used = proposal is None
     failure_reason = None
+    if proposal is not None and (proposal.suggested_action == "DISCOUNT") != (state["days_to_expiry"] < 3):
+        failure_reason = (
+            f"suggested_action={proposal.suggested_action} violates the days_to_expiry "
+            f"rule (days_to_expiry={state['days_to_expiry']}) - discarding"
+        )
+        proposal = None
+    fallback_used = proposal is None
 
     if fallback_used:
         # Collect the first validation error message for the log
@@ -608,7 +792,7 @@ def _build_rationale(headline: str, reasoning: str) -> str:
 def build_kafka_payload(row: dict, llm: dict, agent_id: str) -> dict:
     """
     Builds and validates the strict external payload published to Kafka:
-        {agent_id, sku, recommendation: {suggested_modifier, confidence}, rationale}
+        {agent_id, sku, recommendation: {action, suggested_modifier, confidence}, rationale}
 
     Raises pydantic.ValidationError if the proposal can't be mapped onto the
     external contract - acts as a final safety net before anything leaves the
@@ -619,6 +803,7 @@ def build_kafka_payload(row: dict, llm: dict, agent_id: str) -> dict:
         agent_id=agent_id,
         sku=row["sku_id"],
         recommendation=KafkaRecommendation(
+            action=llm["suggested_action"],
             suggested_modifier=_modifier_to_delta(llm["price_modifier"]),
             confidence=round(llm["confidence_score"], 2),
         ),
@@ -728,7 +913,7 @@ def route_perishable(state: AgentState) -> str:
 
 # -- Conditional edge: are any units at risk? -----------------------------------
 def route_units_at_risk(state: AgentState) -> str:
-    return "compute_loss" if state["units_at_risk"] > 0 else "advance_row"
+    return "compute_loss" if state["units_at_risk"] > 0 else "skip_no_risk"
 
 
 # -- Conditional edge: are there more rows? -------------------------------------
@@ -744,6 +929,7 @@ def build_graph() -> StateGraph:
     graph.add_node("sort_by_urgency", sort_by_urgency_node)
     graph.add_node("check_perishable", check_perishable_node)
     graph.add_node("compute_expiry", compute_expiry_node)
+    graph.add_node("skip_no_risk", skip_no_risk_node)
     graph.add_node("compute_loss", compute_loss_node)
     graph.add_node("assign_urgency", assign_urgency_node)
     graph.add_node("call_llm", call_llm_node)
@@ -763,9 +949,10 @@ def build_graph() -> StateGraph:
     graph.add_conditional_edges(
         "compute_expiry",
         route_units_at_risk,
-        {"compute_loss": "compute_loss", "advance_row": "advance_row"},
+        {"compute_loss": "compute_loss", "skip_no_risk": "skip_no_risk"},
     )
 
+    graph.add_edge("skip_no_risk", "advance_row")
     graph.add_edge("compute_loss", "assign_urgency")
     graph.add_edge("assign_urgency", "call_llm")
     graph.add_edge("call_llm", "build_output")

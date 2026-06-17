@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from final_prices_kafka_publisher import publish_proposal as publish_final_price
 from final_prices_kafka_publisher import flush as kafka_flush
@@ -46,6 +46,45 @@ def _write_log(record: dict, path: str) -> None:
     """Appends a single JSON record to a JSONL audit file."""
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")
+
+
+# -- Decision history (read from the same JSONL audit log build_output_node writes to) --
+def _load_recent_history(sku: str, limit: int = 3) -> list[dict]:
+    """
+    Reads final_prices.jsonl and returns up to the last `limit` prior final
+    decisions for this SKU, oldest first. Purely a local-file read with no
+    dependency on Kafka, so it works unchanged regardless of which broker/
+    topic build_output_node is publishing to.
+    """
+    if not os.path.exists(FINAL_LOG):
+        return []
+    history = []
+    with open(FINAL_LOG) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("sku") == sku:
+                history.append(record)
+    return history[-limit:]
+
+
+def _format_decision_history(history: list[dict]) -> str:
+    """Renders prior final decisions as a prompt block, or states plainly that none exist."""
+    if not history:
+        return "No prior final decision exists for this SKU - this is the first synthesis."
+    lines = []
+    for r in history:
+        rec = r["final_recommendation"]
+        lines.append(
+            f"- {r['timestamp']}: action={rec['action']}, modifier={rec['suggested_modifier']:+.4f}, "
+            f"confidence={rec['confidence']}, status={r['status']}"
+        )
+    return "Prior final decisions for this SKU, most recent last:\n" + "\n".join(lines)
 
 
 # -- System prompt --------------------------------------------------------------
@@ -77,6 +116,18 @@ Your job is to synthesize these into ONE final pricing decision:
 - Do not recommend a final modifier more extreme than the most extreme
   individual input you were given.
 
+You will also be given this SKU's recent final-decision history, if any
+exists. If your prior decision for this SKU pointed the same direction and
+nothing material has changed, say so plainly instead of restating generic
+reasoning. If no history is given, state that this is the first synthesis
+for this SKU rather than inventing a trend that doesn't exist.
+
+Be concrete, never vague. Do not use hand-wavy phrases like "significant
+risk", "moderate confidence", "various factors", "a portion of", or
+"relatively high/low". Every sentence in rationale must cite at least one
+specific number you were actually given - a modifier, a confidence score,
+or a value from the history block.
+
 Respond ONLY with a valid JSON object using exactly this schema:
 {
   "action": "DISCOUNT" | "HOLD" | "SURCHARGE",
@@ -85,6 +136,14 @@ Respond ONLY with a valid JSON object using exactly this schema:
   "rationale": "<two to three sentence explanation referencing the input signal(s) used, minimum 30 characters>"
 }
 No preamble, no markdown fences, only the JSON object."""
+
+
+# -- Phrases that signal hand-wavy, non-numeric reasoning - shared blocklist ----
+_VAGUE_PHRASES = [
+    "significant risk", "moderate confidence", "some units", "a portion of",
+    "various factors", "a number of", "relatively high", "relatively low",
+    "a certain amount", "quite a bit", "fairly significant", "somewhat",
+]
 
 
 # -- Pydantic schema for the LLM's synthesis output ------------------------------
@@ -103,6 +162,24 @@ class FinalLLMProposal(BaseModel):
         if self.action == "HOLD" and abs(self.suggested_modifier) > 0.02:
             raise ValueError("action HOLD but suggested_modifier is non-trivial - contradictory.")
         return self
+
+    @field_validator("rationale")
+    @classmethod
+    def rationale_not_vague(cls, v: str) -> str:
+        """
+        Deterministic backstop behind the system prompt's anti-vagueness
+        instruction - rejects known hand-wavy phrases so the rule-based
+        fallback synthesis kicks in instead of letting vague language
+        reach build_output_node.
+        """
+        lowered = v.lower()
+        hit = next((p for p in _VAGUE_PHRASES if p in lowered), None)
+        if hit:
+            raise ValueError(
+                f'rationale contains vague language ("{hit}") instead of '
+                f"citing specific numbers from the inputs provided."
+            )
+        return v
 
 
 def _parse_llm_response(raw: str) -> Optional[FinalLLMProposal]:
@@ -218,10 +295,14 @@ def call_llm_node(state: AgentState) -> AgentState:
     inventory_data = state["inventory_data"]
     competitor_data = state["competitor_data"]
 
+    decision_history_block = _format_decision_history(_load_recent_history(sku))
+
     prompt = f"""SKU: {sku}
 
 {_format_source("Inventory & Perishability Agent", inventory_data)}
 {_format_source("Competitor Pricing Agent", competitor_data)}
+
+{decision_history_block}
 
 Synthesize a single final pricing decision for this SKU."""
 

@@ -42,6 +42,14 @@ def _write_log(record: dict, path: str) -> None:
         f.write(json.dumps(record) + "\n")
 
 
+def _format_expiry_date(row: dict) -> str:
+    """Formats expiry_datetime as a plain calendar date for display purposes."""
+    try:
+        return datetime.fromisoformat(row["expiry_datetime"]).strftime("%Y-%m-%d")
+    except (KeyError, ValueError):
+        return str(row.get("expiry_datetime", "unknown"))
+
+
 # -- Pricing history (read from the same JSONL audit log build_output_node writes to) --
 def _load_recent_history(sku: str, limit: int = 3) -> List[dict]:
     """
@@ -592,6 +600,14 @@ def skip_no_risk_node(state: AgentState) -> AgentState:
                 4,
             ),
             "fallback_used": False,
+            "product_name": row["product_name"],
+            "category": row["category"],
+            "unit": row["unit"],
+            "stock_on_hand": float(row["stock_on_hand"]),
+            "avg_daily_units_sold": float(row["avg_daily_units_sold"]),
+            "cost_price": float(row["cost_price"]),
+            "expiry_date": _format_expiry_date(row),
+            "rationale": _build_rationale(llm["headline"], llm["detailed_reasoning"]),
         },
         PROPOSAL_LOG,
     )
@@ -874,6 +890,14 @@ def build_output_node(state: AgentState) -> AgentState:
                 4,
             ),
             "fallback_used": is_fallback,
+            "product_name": output["metrics_evaluated"]["product_name"],
+            "category": output["metrics_evaluated"]["category"],
+            "unit": output["metrics_evaluated"]["unit"],
+            "stock_on_hand": output["metrics_evaluated"]["stock_on_hand"],
+            "avg_daily_units_sold": output["metrics_evaluated"]["avg_daily_units_sold"],
+            "cost_price": output["metrics_evaluated"]["cost_price"],
+            "expiry_date": _format_expiry_date(row),
+            "rationale": _build_rationale(llm["headline"], llm["detailed_reasoning"]),
         },
         PROPOSAL_LOG,
     )

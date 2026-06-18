@@ -101,12 +101,15 @@ class MetricsResponse(BaseModel):
 
 
 # -- Kafka consumer (runs in a background thread, never on the event loop) --
-def _ingest(topic: str, payload: dict) -> None:
+def _ingest(topic: str, payload: dict, received_at: Optional[str] = None) -> None:
     """Updates the in-memory cache for one incoming message. Called from the consumer thread."""
     sku = payload.get("sku", "UNKNOWN")
+    received_at = received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _lock:
         _latest[topic][sku] = payload
-        _history[topic].setdefault(sku, deque(maxlen=HISTORY_LIMIT)).append(payload)
+        _history[topic].setdefault(sku, deque(maxlen=HISTORY_LIMIT)).append(
+            {"received_at": received_at, "payload": payload}
+        )
         _topic_stats[topic]["message_count"] += 1
         _topic_stats[topic]["last_message_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -140,7 +143,13 @@ def _consume_loop(stop_event: threading.Event) -> None:
             except json.JSONDecodeError as e:
                 print(f"[dashboard-consumer] [WARNING] Skipping malformed message: {e}")
                 continue
-            _ingest(msg.topic(), payload)
+
+            ts_type, ts_ms = msg.timestamp()
+            received_at = (
+                datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if ts_type != 0 else None
+            )
+            _ingest(msg.topic(), payload, received_at)
     finally:
         consumer.close()
 
@@ -291,3 +300,122 @@ async def websocket_feed(websocket: WebSocket):
     finally:
         if websocket in _ws_clients:
             _ws_clients.remove(websocket)
+
+
+# -- Inventory agent dashboard view -------------------------------------------
+# A dedicated, denormalized view for the inventory-agent screen specifically.
+# Built from the same cache as everything above - no separate consumer, just
+# a different shape, computed from the `metrics` block agent.py now publishes.
+
+def _risk_tier(units_at_risk: float, stock_on_hand: float, days_to_expiry: float) -> str:
+    """Coarse High/Medium/Low label for the dashboard's waste-risk badge."""
+    risk_ratio = (units_at_risk / stock_on_hand) if stock_on_hand else 0.0
+    if days_to_expiry <= 1 or risk_ratio >= 0.7:
+        return "HIGH"
+    if days_to_expiry <= 3 or risk_ratio >= 0.4:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _weekly_depletion_curve(history: List[dict], current_stock: float, avg_daily_units_sold: float) -> List[dict]:
+    """
+    Buckets cached history by ISO week (using each message's received_at)
+    and takes the last stock_on_hand seen per week, oldest first, then
+    appends one naive forward projection.
+
+    Caveat: this is only as good as how far back the cache reaches
+    (HISTORY_LIMIT entries). If the inventory agent runs more than a few
+    times a day, the cache may not span multiple distinct weeks yet - this
+    returns fewer bars in that case rather than fabricating ones that don't
+    exist.
+    """
+    weekly: Dict[str, float] = {}
+    for entry in history:
+        try:
+            dt = datetime.strptime(entry["received_at"], "%Y-%m-%dT%H:%M:%SZ")
+        except (KeyError, ValueError, TypeError):
+            continue
+        iso_year, iso_week, _ = dt.isocalendar()
+        stock = (entry.get("payload") or {}).get("metrics", {}).get("stock_on_hand")
+        if stock is not None:
+            weekly[f"{iso_year}-W{iso_week:02d}"] = stock  # last entry in the bucket wins (history is append-ordered)
+
+    bars = [{"label": k, "stock_on_hand": weekly[k], "is_projected": False} for k in sorted(weekly.keys())]
+    projected = max(0.0, current_stock - avg_daily_units_sold * 7)
+    bars.append({"label": "Projected", "stock_on_hand": round(projected, 1), "is_projected": True})
+    return bars
+
+
+@app.get("/agents/inventory/skus")
+def list_inventory_skus():
+    """SKU + display name pairs, for a dropdown selector."""
+    with _lock:
+        return [
+            {"sku": sku, "product_name": (msg.get("metrics") or {}).get("product_name", sku)}
+            for sku, msg in sorted(_latest["inventory-agent"].items())
+        ]
+
+
+@app.get("/agents/inventory/{sku}")
+def get_inventory_detail(sku: str):
+    with _lock:
+        msg = _latest["inventory-agent"].get(sku)
+        if msg is None:
+            raise HTTPException(status_code=404, detail=f"No inventory-agent data yet for sku={sku}")
+        history = list(_history["inventory-agent"].get(sku, []))
+
+    metrics = msg.get("metrics", {})
+    rec = msg.get("recommendation", {})
+    stock_on_hand = metrics.get("stock_on_hand", 0.0)
+    units_at_risk = metrics.get("units_at_risk", 0.0)
+    days_to_expiry = metrics.get("days_to_expiry", 0.0)
+    avg_daily_units_sold = metrics.get("avg_daily_units_sold", 0.0)
+    cost_price = metrics.get("cost_price")
+    risk_tier = _risk_tier(units_at_risk, stock_on_hand, days_to_expiry)
+
+    # "Original stock" has no real input source today (see InventoryMetrics'
+    # docstring in agent.py) - estimated as the earliest stock_on_hand this
+    # cache has actually observed for the SKU, flagged as an estimate rather
+    # than presented as a hard figure.
+    oldest_known_stock = stock_on_hand
+    if history:
+        first_metrics = (history[0].get("payload") or {}).get("metrics", {})
+        oldest_known_stock = first_metrics.get("stock_on_hand", stock_on_hand)
+    stock_coverage_pct = round(100 * stock_on_hand / oldest_known_stock, 1) if oldest_known_stock else None
+
+    required_velocity = round(units_at_risk / days_to_expiry, 1) if days_to_expiry > 0 else units_at_risk
+
+    return {
+        "sku": sku,
+        "product_name": metrics.get("product_name", sku),
+        "category": metrics.get("category"),
+        "unit": metrics.get("unit"),
+        "alert": {
+            "severity": risk_tier,
+            "units_remaining": stock_on_hand,
+            "days_to_expiry": days_to_expiry,
+            "recommended_action": rec.get("action"),
+        },
+        "metrics": {
+            "units_remaining": stock_on_hand,
+            "original_stock_estimate": oldest_known_stock,
+            "original_stock_is_estimated": True,
+            "stock_coverage_pct": stock_coverage_pct,
+            "days_to_expiry": days_to_expiry,
+            "expiry_date": metrics.get("expiry_date"),
+            "markdown_pct": round(rec.get("suggested_modifier", 0.0) * 100, 1),
+            "cost_price": cost_price,
+        },
+        "justification": {
+            "waste_risk_tier": risk_tier,
+            "units_at_risk": units_at_risk,
+            "cost_basis_value_at_risk": round(units_at_risk * cost_price, 2) if cost_price is not None else None,
+            "daily_velocity": avg_daily_units_sold,
+            "units_to_clear": units_at_risk,
+            "required_velocity": required_velocity,
+        },
+        "depletion_curve": _weekly_depletion_curve(history, stock_on_hand, avg_daily_units_sold),
+        "reasoning": msg.get("rationale"),
+        "confidence": rec.get("confidence"),
+        "fallback_used": metrics.get("fallback_used", False),
+    }

@@ -53,26 +53,52 @@ class AgentState(TypedDict):
 
 
 # ---------------------------------------------
-#  NODE 1 - LOAD CSV
+#  NODE 1 - LOAD PRODUCTS FROM DATABASE
 # ---------------------------------------------
 def load_csv(state: AgentState) -> AgentState:
-    """Read products.csv -> list of product dicts."""
-    logger.info("[NODE 1/5]   Loading product catalogue from CSV")
+    
+    logger.info("[NODE 1/5]   Loading product catalogue from Supabase")
     try:
-        df = pd.read_csv(state["csv_path"])
-        required = {"sku_id", "product_name", "unit", "our_price"}
-        missing  = required - set(df.columns)
-        if missing:
-            raise ValueError(f"CSV missing columns: {missing}")
+        # Read from Supabase `products_sku` table instead of CSV
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_ANON_KEY")
 
-        products = df.to_dict(orient="records")
-        logger.info(
-            f"Loaded {len(products)} SKU(s): {[p['sku_id'] for p in products]}"
-        )
+        if not supabase_url or not supabase_key:
+            msg = "Supabase credentials (SUPABASE_URL / SUPABASE_SERVICE_KEY) not set"
+            logger.error(msg)
+            return {**state, "products": [], "errors": [msg]}
+
+        url = f"{supabase_url.rstrip('/')}/rest/v1/products_sku"
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+            "Accept": "application/json"
+        }
+        params = {"select": "sku_id,product_name,unit,our_price,category"}
+
+        resp = requests.get(url, headers=headers, params=params, timeout=10, verify=False)
+        resp.raise_for_status()
+        products = resp.json()
+
+        # Validate fields
+        required = {"sku_id", "product_name", "unit", "our_price"}
+        if not isinstance(products, list):
+            raise ValueError("Unexpected response from Supabase: not a list")
+
+        missing_any = set()
+        for p in products:
+            missing = required - set(p.keys())
+            if missing:
+                missing_any.update(missing)
+
+        if missing_any:
+            raise ValueError(f"products_sku missing required columns: {missing_any}")
+
+        logger.info(f"Loaded {len(products)} SKU(s) from products_sku: {[p['sku_id'] for p in products]}")
         return {**state, "products": products, "errors": []}
 
     except Exception as exc:
-        logger.error(f"CSV error: {exc}")
+        logger.error(f"DB load error: {exc}")
         return {**state, "products": [], "errors": [str(exc)]}
 
 

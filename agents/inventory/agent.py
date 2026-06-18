@@ -8,15 +8,14 @@ Graph nodes:
                       -> advance_row      -> (loop or END)
 
 Run:
-    python inventory_agent.py --api-key YOUR_KEY --csv products.csv
+    python inventory_agent.py --api-key YOUR_KEY
 """
 
-import csv
 import json
 import os
 import uuid
+import requests
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Literal, Optional, TypedDict
 
 from dotenv import load_dotenv
@@ -350,7 +349,6 @@ def fallback_proposal(state: "AgentState") -> dict:
 # -- Shared state ---------------------------------------------------------------
 class AgentState(TypedDict):
     # inputs
-    csv_path: str
     api_key: str
     # run identifier - shared across all log records in one pipeline execution
     run_id: str
@@ -379,18 +377,41 @@ class AgentState(TypedDict):
     urgency_queue: List[dict]
 
 
-# -- Node 1: load_csv -----------------------------------------------------------
+# -- Node 1: load_products_data -----------------------------------------------------------
 def load_csv_node(state: AgentState) -> AgentState:
-    """Reads the CSV and loads all rows into state."""
-    with open(state["csv_path"], newline="") as f:
-        state["rows"] = list(csv.DictReader(f))
+    """Reads the product data and loads all rows into state."""
+    # Fetch rows from Supabase `products_sku` table instead of local CSV
+    try:
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+        if not supabase_url or not supabase_key:
+            raise EnvironmentError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment")
+
+        url = f"{supabase_url.rstrip('/')}/rest/v1/products_sku"
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+            "Accept": "application/json"
+        }
+        params = {"select": "*"}
+
+        resp = requests.get(url, headers=headers, params=params, timeout=10, verify=False)
+        resp.raise_for_status()
+        rows = resp.json()
+        if not isinstance(rows, list):
+            raise ValueError("Unexpected response from Supabase: expected a list of rows")
+
+        state["rows"] = rows
+    except Exception as exc:
+        print(f"[load_csv] Failed to load rows from Supabase: {exc}")
+        state["rows"] = []
+
     state["row_index"] = 0
     state["results"] = []
     state["urgency_queue"] = []
     state["all_token_usage"] = []
     print(f"[load_csv] Loaded {len(state['rows'])} row(s)  run_id={state['run_id']}")
     return state
-
 
 # -- Node 1b: sort_by_urgency ---------------------------------------------------
 # Urgency tier weights - lower number = processed first
@@ -403,8 +424,13 @@ def _precompute_urgency(row: dict) -> tuple[str, float]:
     Returns (urgency_label, loss_if_no_action) for sorting purposes.
     Rows that are non-perishable or have no units at risk return ("SKIP", 0.0).
     """
-    if row.get("is_perishable", "").strip().upper() != "TRUE":
-        return "SKIP", 0.0
+    is_perishable = row.get("is_perishable")
+    if isinstance(is_perishable, bool):
+        if not is_perishable:
+            return "SKIP", 0.0
+    else:
+        if str(is_perishable).strip().upper() != "TRUE":
+            return "SKIP", 0.0
 
     try:
         now = datetime.now(timezone.utc)
@@ -513,7 +539,11 @@ def check_perishable_node(state: AgentState) -> AgentState:
     """
     row = state["rows"][state["row_index"]]
     state["current_row"] = row
-    state["is_perishable"] = row.get("is_perishable", "").strip().upper() == "TRUE"
+    is_perishable = row.get("is_perishable")
+    if isinstance(is_perishable, bool):
+        state["is_perishable"] = is_perishable
+    else:
+        state["is_perishable"] = str(is_perishable).strip().upper() == "TRUE"
     sku = row.get("sku_id", "UNKNOWN")
     print(f"[check_perishable] [{sku}] is_perishable={state['is_perishable']}")
     return state
@@ -979,27 +1009,11 @@ def main():
             "  GEMINI_API_KEY=your_key_here"
         )
 
-    # -- Hardcoded CSV path relative to this file -------------------------------
-    csv_path = (
-        Path(__file__).resolve().parent.parent.parent
-        / "data"
-        / "inputs"
-        / "inventory-agent"
-        / "products_inv.csv"
-    )
-    if not csv_path.exists():
-        raise FileNotFoundError(
-            f"Inventory CSV not found at expected path:\n  {csv_path}\n"
-            "Ensure products_inv.csv exists under data/inputs/inventory-agent/"
-        )
-
     app = build_graph()
     run_id = str(uuid.uuid4())[:8]
     print(f"\n[main] Starting run  run_id={run_id}")
-    print(f"[main] CSV           -> {csv_path}")
 
     initial_state: AgentState = {
-        "csv_path": str(csv_path),
         "api_key": api_key,
         "run_id": run_id,
         "rows": [],

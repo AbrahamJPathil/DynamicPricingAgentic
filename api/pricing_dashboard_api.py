@@ -168,6 +168,9 @@ class MetricsResponse(BaseModel):
 # -- Kafka consumer (runs in a background thread, never on the event loop) --
 def _ingest(topic: str, payload: dict, received_at: Optional[str] = None) -> None:
     """Updates the in-memory cache for one incoming message. Called from the consumer thread."""
+    if not isinstance(payload, dict):
+        print(f"[dashboard-consumer] [WARNING] Skipping non-dict message on topic '{topic}': {type(payload).__name__}")
+        return
     sku = payload.get("sku") or payload.get("sku_id", "UNKNOWN")
     received_at = received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _lock:
@@ -204,17 +207,21 @@ def _consume_loop(stop_event: threading.Event) -> None:
                 print(f"[dashboard-consumer] [ERROR] {msg.error()}")
                 continue
             try:
-                payload = json.loads(msg.value().decode("utf-8"))
+                raw = json.loads(msg.value().decode("utf-8"))
             except json.JSONDecodeError as e:
                 print(f"[dashboard-consumer] [WARNING] Skipping malformed message: {e}")
                 continue
+
+            # Accept both a single dict and a list of dicts
+            payloads = raw if isinstance(raw, list) else [raw]
 
             ts_type, ts_ms = msg.timestamp()
             received_at = (
                 datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 if ts_type != 0 else None
             )
-            _ingest(msg.topic(), payload, received_at)
+            for payload in payloads:
+                _ingest(msg.topic(), payload, received_at)
     finally:
         consumer.close()
 

@@ -32,7 +32,6 @@ Interactive API docs once running: http://localhost:8000/docs
 
 import asyncio
 import json
-import os
 import threading
 from collections import deque
 from contextlib import asynccontextmanager
@@ -304,47 +303,12 @@ async def websocket_feed(websocket: WebSocket):
 
 
 # -- Inventory agent dashboard view -------------------------------------------
-# Unlike everything above (which is fed by the Kafka consumer thread), this
-# section reads agent.py's own local audit log directly. proposals.jsonl
-# already gets a full, append-ordered record on every run - including
-# product_name/stock_on_hand/cost_price/rationale, which the Kafka payload
-# either doesn't carry at all or only reflects as of whatever the inventory
-# agent last actually published - so this sidesteps the staleness problem
-# entirely: every request re-reads the file, so it's always exactly as
-# current as the log itself.
-#
-# Hard requirement this trades in for that: this service must have
-# filesystem access to the exact same proposals.jsonl the inventory agent
-# writes to - i.e. they need to run on the same host (or share a mounted
-# volume). Unlike the Kafka-fed endpoints above, this one will NOT work if
-# the dashboard runs on a different machine than the inventory agent.
+# A dedicated, denormalized view for the inventory-agent screen specifically.
+# Built from the same cache as everything above - no separate consumer, just
+# a different shape, computed from the `metrics` block agent.py now publishes.
 
-INVENTORY_LOG_PATH = "proposals.jsonl"  # must match agent.py's PROPOSAL_LOG path
-
-
-def _read_inventory_log(path: str = INVENTORY_LOG_PATH) -> List[dict]:
-    """Reads every PROPOSAL record from the inventory agent's local audit log, in file order."""
-    if not os.path.exists(path):
-        return []
-    records = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("log_type") == "PROPOSAL":
-                records.append(record)
-    return records
-
-
-def _risk_tier(units_at_risk: Optional[float], stock_on_hand: Optional[float], days_to_expiry: Optional[float]) -> str:
+def _risk_tier(units_at_risk: float, stock_on_hand: float, days_to_expiry: float) -> str:
     """Coarse High/Medium/Low label for the dashboard's waste-risk badge."""
-    if units_at_risk is None or stock_on_hand is None or days_to_expiry is None:
-        return "UNKNOWN"  # missing data, not a real 0 - don't disguise it as urgent
     risk_ratio = (units_at_risk / stock_on_hand) if stock_on_hand else 0.0
     if days_to_expiry <= 1 or risk_ratio >= 0.7:
         return "HIGH"
@@ -353,85 +317,84 @@ def _risk_tier(units_at_risk: Optional[float], stock_on_hand: Optional[float], d
     return "LOW"
 
 
-def _weekly_depletion_curve_from_log(
-    sku_records: List[dict], current_stock: Optional[float], avg_daily_units_sold: Optional[float]
-) -> List[dict]:
+def _weekly_depletion_curve(history: List[dict], current_stock: float, avg_daily_units_sold: float) -> List[dict]:
     """
-    Buckets this SKU's full log history by ISO week (using each record's own
-    timestamp) and takes the last stock_on_hand seen per week, oldest first,
-    then appends one naive forward projection. Unlike the Kafka-cache
-    version, there's no HISTORY_LIMIT here - this sees every run that's ever
-    been logged for the SKU.
+    Buckets cached history by ISO week (using each message's received_at)
+    and takes the last stock_on_hand seen per week, oldest first, then
+    appends one naive forward projection.
+
+    Caveat: this is only as good as how far back the cache reaches
+    (HISTORY_LIMIT entries). If the inventory agent runs more than a few
+    times a day, the cache may not span multiple distinct weeks yet - this
+    returns fewer bars in that case rather than fabricating ones that don't
+    exist.
     """
     weekly: Dict[str, float] = {}
-    for r in sku_records:
-        ts, stock = r.get("timestamp"), r.get("stock_on_hand")
-        if ts is None or stock is None:
-            continue
+    for entry in history:
         try:
-            dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
-        except ValueError:
+            dt = datetime.strptime(entry["received_at"], "%Y-%m-%dT%H:%M:%SZ")
+        except (KeyError, ValueError, TypeError):
             continue
         iso_year, iso_week, _ = dt.isocalendar()
-        weekly[f"{iso_year}-W{iso_week:02d}"] = stock  # last entry in the bucket wins (file is append-ordered)
+        stock = (entry.get("payload") or {}).get("metrics", {}).get("stock_on_hand")
+        if stock is not None:
+            weekly[f"{iso_year}-W{iso_week:02d}"] = stock  # last entry in the bucket wins (history is append-ordered)
 
     bars = [{"label": k, "stock_on_hand": weekly[k], "is_projected": False} for k in sorted(weekly.keys())]
-    if current_stock is not None and avg_daily_units_sold is not None:
-        projected = max(0.0, current_stock - avg_daily_units_sold * 7)
-        bars.append({"label": "Projected", "stock_on_hand": round(projected, 1), "is_projected": True})
+    projected = max(0.0, current_stock - avg_daily_units_sold * 7)
+    bars.append({"label": "Projected", "stock_on_hand": round(projected, 1), "is_projected": True})
     return bars
 
 
 @app.get("/agents/inventory/skus")
 def list_inventory_skus():
     """SKU + display name pairs, for a dropdown selector."""
-    latest_per_sku: Dict[str, dict] = {}
-    for r in _read_inventory_log():
-        sku = r.get("sku_id")
-        if sku:
-            latest_per_sku[sku] = r  # last record wins, file is append-ordered
-    return [
-        {"sku": sku, "product_name": r.get("product_name", sku)}
-        for sku, r in sorted(latest_per_sku.items())
-    ]
+    with _lock:
+        return [
+            {"sku": sku, "product_name": (msg.get("metrics") or {}).get("product_name", sku)}
+            for sku, msg in sorted(_latest["inventory-agent"].items())
+        ]
 
 
 @app.get("/agents/inventory/{sku}")
 def get_inventory_detail(sku: str):
-    sku_records = [r for r in _read_inventory_log() if r.get("sku_id") == sku]
-    if not sku_records:
-        raise HTTPException(status_code=404, detail=f"No proposals.jsonl entries yet for sku={sku}")
+    with _lock:
+        msg = _latest["inventory-agent"].get(sku)
+        if msg is None:
+            raise HTTPException(status_code=404, detail=f"No inventory-agent data yet for sku={sku}")
+        history = list(_history["inventory-agent"].get(sku, []))
 
-    latest = sku_records[-1]
-    stock_on_hand = latest.get("stock_on_hand")
-    units_at_risk = latest.get("units_at_risk")
-    days_to_expiry = latest.get("days_to_expiry")
-    avg_daily_units_sold = latest.get("avg_daily_units_sold")
-    cost_price = latest.get("cost_price")
+    metrics = msg.get("metrics", {})
+    rec = msg.get("recommendation", {})
+    stock_on_hand = metrics.get("stock_on_hand", 0.0)
+    units_at_risk = metrics.get("units_at_risk", 0.0)
+    days_to_expiry = metrics.get("days_to_expiry", 0.0)
+    avg_daily_units_sold = metrics.get("avg_daily_units_sold", 0.0)
+    cost_price = metrics.get("cost_price")
     risk_tier = _risk_tier(units_at_risk, stock_on_hand, days_to_expiry)
 
-    oldest_known_stock = sku_records[0].get("stock_on_hand", stock_on_hand)
-    stock_coverage_pct = (
-        round(100 * stock_on_hand / oldest_known_stock, 1)
-        if stock_on_hand is not None and oldest_known_stock
-        else None
-    )
-    required_velocity = (
-        round(units_at_risk / days_to_expiry, 1)
-        if units_at_risk is not None and days_to_expiry
-        else units_at_risk
-    )
+    # "Original stock" has no real input source today (see InventoryMetrics'
+    # docstring in agent.py) - estimated as the earliest stock_on_hand this
+    # cache has actually observed for the SKU, flagged as an estimate rather
+    # than presented as a hard figure.
+    oldest_known_stock = stock_on_hand
+    if history:
+        first_metrics = (history[0].get("payload") or {}).get("metrics", {})
+        oldest_known_stock = first_metrics.get("stock_on_hand", stock_on_hand)
+    stock_coverage_pct = round(100 * stock_on_hand / oldest_known_stock, 1) if oldest_known_stock else None
+
+    required_velocity = round(units_at_risk / days_to_expiry, 1) if days_to_expiry > 0 else units_at_risk
 
     return {
         "sku": sku,
-        "product_name": latest.get("product_name", sku),
-        "category": latest.get("category"),
-        "unit": latest.get("unit"),
+        "product_name": metrics.get("product_name", sku),
+        "category": metrics.get("category"),
+        "unit": metrics.get("unit"),
         "alert": {
             "severity": risk_tier,
             "units_remaining": stock_on_hand,
             "days_to_expiry": days_to_expiry,
-            "recommended_action": latest.get("suggested_action"),
+            "recommended_action": rec.get("action"),
         },
         "metrics": {
             "units_remaining": stock_on_hand,
@@ -439,24 +402,20 @@ def get_inventory_detail(sku: str):
             "original_stock_is_estimated": True,
             "stock_coverage_pct": stock_coverage_pct,
             "days_to_expiry": days_to_expiry,
-            "expiry_date": latest.get("expiry_date"),
-            "markdown_pct": round((latest.get("price_modifier", 1.0) - 1.0) * 100, 1),
+            "expiry_date": metrics.get("expiry_date"),
+            "markdown_pct": round(rec.get("suggested_modifier", 0.0) * 100, 1),
             "cost_price": cost_price,
         },
         "justification": {
             "waste_risk_tier": risk_tier,
             "units_at_risk": units_at_risk,
-            "cost_basis_value_at_risk": (
-                round(units_at_risk * cost_price, 2)
-                if units_at_risk is not None and cost_price is not None
-                else None
-            ),
+            "cost_basis_value_at_risk": round(units_at_risk * cost_price, 2) if cost_price is not None else None,
             "daily_velocity": avg_daily_units_sold,
             "units_to_clear": units_at_risk,
             "required_velocity": required_velocity,
         },
-        "depletion_curve": _weekly_depletion_curve_from_log(sku_records, stock_on_hand, avg_daily_units_sold),
-        "reasoning": latest.get("rationale"),
-        "confidence": latest.get("confidence_score"),
-        "fallback_used": latest.get("fallback_used", False),
+        "depletion_curve": _weekly_depletion_curve(history, stock_on_hand, avg_daily_units_sold),
+        "reasoning": msg.get("rationale"),
+        "confidence": rec.get("confidence"),
+        "fallback_used": metrics.get("fallback_used", False),
     }

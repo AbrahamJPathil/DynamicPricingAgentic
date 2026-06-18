@@ -485,13 +485,13 @@ if __name__ == "__main__":
     # -- Ensure every buffered Kafka message is actually sent before exiting --
     kafka_flush()
 
-    # -- Publish the full detailed report to the competitor-detailed topic ------
-    # This is the complete results list (all SKUs with metrics, proposals, and
-    # justifications) — the same JSON previously only printed to the terminal.
-    # A run-scoped timestamp is used as the Kafka message key so consumers can
-    # group/identify messages by run.
-    run_key = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    publish_report(final_state["results"], key=run_key)
+    # -- Publish one detailed message per SKU to the competitor-detailed topic --
+    # Each result entry (full metrics, proposal, and justification) is published
+    # as its own Kafka message keyed by SKU, consistent with how the slim
+    # competitor-agent topic works.
+    for entry in final_state["results"]:
+        sku = entry["metrics_evaluated"]["sku"]
+        publish_report(entry, key=sku)
     kafka_flush_detailed()
 
     logger.info("FINAL JSON OUTPUT")

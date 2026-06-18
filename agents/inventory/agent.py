@@ -25,15 +25,11 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from kafka_publisher import publish_proposal, flush as kafka_flush
+from kafka_publisher import publish_detailed, publish_proposal, flush as kafka_flush
 
 # -- Audit log paths ------------------------------------------------------------
 PROPOSAL_LOG = "proposals.jsonl"
 VALIDATION_LOG = "validations.jsonl"
-RESULTS_LOG = "inventory_results.jsonl"  # full per-SKU output object (metrics_evaluated/proposal/justification) -
-                                          # same dict that gets printed to stdout at the end of main(), just also
-                                          # persisted so the dashboard API has somewhere to read product-level
-                                          # detail (product_name, stock_on_hand, cost_price, etc.) from.
 
 # Gemini 2.5 Flash pricing (USD per 1M tokens, as of June 2026)
 _PROMPT_COST_PER_1M = 0.075
@@ -1052,7 +1048,6 @@ def main():
     print(f"[main] {sep}")
     print(f"[main]  Proposal log   -> {PROPOSAL_LOG}")
     print(f"[main]  Validation log -> {VALIDATION_LOG}")
-    print(f"[main]  Results log    -> {RESULTS_LOG}")
     print(f"[main] {sep}\n")
 
     # -- Ensure every buffered Kafka message is actually sent before exiting ---
@@ -1062,7 +1057,7 @@ def main():
     for output in final_state["results"]:
         print(json.dumps(output, indent=2))
         print()
-        _write_log(output, RESULTS_LOG)
+        publish_detailed(output, key=output["sku_id"])
 
 
 if __name__ == "__main__":

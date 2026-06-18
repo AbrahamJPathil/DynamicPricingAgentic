@@ -1,0 +1,7 @@
+google-genai
+python-dotenv
+langgraph
+langchain
+langchain-core
+langchain-google-genai
+typing-extensions

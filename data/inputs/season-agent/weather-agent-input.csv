@@ -1,0 +1,3 @@
+sku_id,product_name,category,units_sold_last_24h,season,weather_sensitivity_score,avg_units_sold_same_week_last_year,current_temp_f,current_temp_c,forecast_temp_f,forecast_temp_c,weather_event_flag
+MEA001,Rotisserie Chicken,meat,6,Summer,Medium,9,91,32.8,95,35.0,Heatwave
+MEA002,Ground Beef 75/25,meat,21,Summer,Low,18,91,32.8,95,35.0,Heatwave

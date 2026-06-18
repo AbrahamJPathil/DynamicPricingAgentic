@@ -73,7 +73,7 @@ from scheduler.runner import is_running, logger as agent_logger, run_agent
 
 # -- Kafka config -----------------------------------------------------------
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-TOPICS = ["inventory-agent", "competitor-agent", "final-prices", "inventory-detailed"]
+TOPICS = ["inventory-agent", "competitor-agent", "final-prices", "inventory-detailed", "competitor-detailed"]
 CONSUMER_GROUP_ID = "pricing_dashboard_api"
 HISTORY_LIMIT = 20  # entries kept per (topic, sku), for timeline/trend views
 
@@ -547,6 +547,84 @@ def get_inventory_detail(sku: str):
                 "required_velocity": required_velocity,
             },
             "depletion_curve": _weekly_depletion_curve(records, stock_on_hand, avg_daily_units_sold),
+            "reasoning": _combine_rationale(justification_in),
+            "confidence": proposal.get("confidence_score"),
+            "fallback_used": latest.get("status") == "FALLBACK",
+        }
+
+
+# -- Competitor agent dashboard view -------------------------------------------
+# A dedicated, denormalized view for the competitor-agent screen, served from
+# the "competitor-detailed" Kafka topic (rich payload with metrics_evaluated,
+# proposal, justification) and falling back to the "competitor-agent" topic
+# (compact payload with recommendation + rationale) for the SKU listing.
+
+
+@app.get("/agents/competitor/skus")
+def list_competitor_skus():
+    """SKU + competitor pricing pairs, for a dropdown selector."""
+    with _lock:
+        # Prefer the detailed topic when available; fall back to basic topic
+        seen = set()
+        result = []
+        for sku, rec in sorted(_latest.get("competitor-detailed", {}).items()):
+            seen.add(sku)
+            metrics = rec.get("metrics_evaluated", {})
+            result.append({
+                "sku": sku,
+                "our_current_price": metrics.get("our_current_price"),
+                "competitor_price": metrics.get("competitor_price"),
+            })
+        for sku, rec in sorted(_latest.get("competitor-agent", {}).items()):
+            if sku not in seen:
+                result.append({
+                    "sku": sku,
+                    "our_current_price": None,
+                    "competitor_price": None,
+                })
+        return result
+
+
+@app.get("/agents/competitor/{sku}")
+def get_competitor_detail(sku: str):
+    with _lock:
+        latest = _latest.get("competitor-detailed", {}).get(sku)
+        if latest is None:
+            raise HTTPException(status_code=404, detail=f"No competitor data yet for sku={sku}")
+
+        history_entries = list(_history.get("competitor-detailed", {}).get(sku, []))
+        records = [entry["payload"] for entry in history_entries]
+
+        metrics = latest.get("metrics_evaluated", {})
+        proposal = latest.get("proposal", {})
+        justification_in = latest.get("justification", {})
+
+        our_price = metrics.get("our_current_price")
+        comp_price = metrics.get("competitor_price")
+        price_diff_pct = round(100 * (comp_price - our_price) / our_price, 1) if our_price and comp_price else None
+        price_modifier = proposal.get("price_modifier", 1.0)
+
+        return {
+            "sku": sku,
+            "our_current_price": our_price,
+            "competitor_price": comp_price,
+            "price_difference_pct": price_diff_pct,
+            "status": latest.get("status"),
+            "timestamp": latest.get("timestamp"),
+            "alert": {
+                "suggested_action": proposal.get("suggested_action"),
+                "modifier_pct": round((price_modifier - 1.0) * 100, 1),
+                "confidence_score": proposal.get("confidence_score"),
+            },
+            "metrics": {
+                "our_current_price": our_price,
+                "competitor_price": comp_price,
+                "price_difference_pct": price_diff_pct,
+            },
+            "justification": {
+                "headline": justification_in.get("headline"),
+                "detailed_reasoning": justification_in.get("detailed_reasoning"),
+            },
             "reasoning": _combine_rationale(justification_in),
             "confidence": proposal.get("confidence_score"),
             "fallback_used": latest.get("status") == "FALLBACK",

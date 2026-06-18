@@ -171,7 +171,12 @@ def _ingest(topic: str, payload: dict, received_at: Optional[str] = None) -> Non
     if not isinstance(payload, dict):
         print(f"[dashboard-consumer] [WARNING] Skipping non-dict message on topic '{topic}': {type(payload).__name__}")
         return
-    sku = payload.get("sku") or payload.get("sku_id", "UNKNOWN")
+    sku = (
+        payload.get("sku")
+        or payload.get("sku_id")
+        or (payload.get("metrics_evaluated") or {}).get("sku")
+        or "UNKNOWN"
+    )
     received_at = received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _lock:
         _latest[topic][sku] = payload
@@ -596,8 +601,36 @@ def list_competitor_skus():
 def get_competitor_detail(sku: str):
     with _lock:
         latest = _latest.get("competitor-detailed", {}).get(sku)
+
+        # Fall back to the simpler "competitor-agent" topic when the
+        # detailed topic has no entry for this SKU yet.
         if latest is None:
-            raise HTTPException(status_code=404, detail=f"No competitor data yet for sku={sku}")
+            basic = _latest.get("competitor-agent", {}).get(sku)
+            if basic is None:
+                raise HTTPException(status_code=404, detail=f"No competitor data yet for sku={sku}")
+            rec = basic.get("recommendation", {})
+            return {
+                "sku": sku,
+                "our_current_price": None,
+                "competitor_price": None,
+                "price_difference_pct": None,
+                "status": None,
+                "timestamp": None,
+                "alert": {
+                    "suggested_action": None,
+                    "modifier_pct": round((rec.get("suggested_modifier", 0.0)) * 100, 1),
+                    "confidence_score": rec.get("confidence"),
+                },
+                "metrics": {
+                    "our_current_price": None,
+                    "competitor_price": None,
+                    "price_difference_pct": None,
+                },
+                "justification": None,
+                "reasoning": basic.get("rationale"),
+                "confidence": rec.get("confidence"),
+                "fallback_used": True,
+            }
 
         history_entries = list(_history.get("competitor-detailed", {}).get(sku, []))
         records = [entry["payload"] for entry in history_entries]

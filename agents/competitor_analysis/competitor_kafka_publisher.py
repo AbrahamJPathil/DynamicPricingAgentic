@@ -1,14 +1,17 @@
 """
-Lightweight Kafka publisher for the competitor pricing agent.
-Same pattern as kafka_publisher.py (inventory agent), just pointed at a
-different topic - each agent gets its own thin publisher module.
+Kafka publisher for the full competitor pricing report.
+
+Publishes the complete results list (one message per agent run) to the
+"competitor-detailed" topic.  The payload is the raw list of report
+entries - every SKU, including metrics_evaluated, proposal, and
+justification - making it the verbose counterpart to the slim
+"competitor-agent" topic messages.
 
 Usage:
-    from competitor_kafka_publisher import publish_proposal, flush
+    from competitor_detailed_kafka_publisher import publish_report, flush
 
-    publish_proposal(payload_dict, key=sku)
-    ...
-    flush()   # call once, right before the process exits
+    publish_report(results_list)   # call once, after the run is complete
+    flush()                        # call once, right before the process exits
 """
 
 import json
@@ -17,7 +20,7 @@ from typing import Optional
 from confluent_kafka import Producer
 
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-TOPIC = "competitor-agent"
+TOPIC = "competitor-detailed"
 
 _producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
@@ -25,23 +28,30 @@ _producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 def _delivery_report(err, msg) -> None:
     """Confluent-Kafka callback fired once per message, async, on the next poll()."""
     if err is not None:
-        print(f"[kafka] delivery failed (key={msg.key()}): {err}")
+        print(f"[kafka-detailed] delivery failed (key={msg.key()}): {err}")
     else:
         print(
-            f"[kafka] delivered -> topic={msg.topic()} "
+            f"[kafka-detailed] delivered -> topic={msg.topic()} "
             f"partition={msg.partition()} offset={msg.offset()}"
         )
 
 
-def publish_proposal(payload: dict, key: Optional[str] = None) -> None:
+def publish_report(results: list, key: Optional[str] = None) -> None:
     """
-    Serializes payload to JSON and produces it onto the competitor-agent topic.
+    Serializes the full results list to JSON and produces it onto the
+    competitor-detailed topic as a single message.
+
     This call is non-blocking - the message is buffered and sent asynchronously.
+
+    Args:
+        results:  The complete list of per-SKU report dicts (final_state["results"]).
+        key:      Optional Kafka message key (e.g. a run-id or timestamp string).
+                  When None the message is routed by the default partitioner.
     """
     _producer.produce(
         topic=TOPIC,
         key=key.encode("utf-8") if key else None,
-        value=json.dumps(payload).encode("utf-8"),
+        value=json.dumps(results).encode("utf-8"),
         callback=_delivery_report,
     )
     # Triggers any pending delivery-report callbacks without blocking.

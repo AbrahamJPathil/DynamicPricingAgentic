@@ -1,12 +1,12 @@
 """
 Pricing Dashboard API
-Dynamic Pricing POC - read-only FastAPI bridge between the 3 Kafka topics
+Dynamic Pricing POC - read-only FastAPI bridge between the 4 Kafka topics
 and a frontend dashboard.
 
 This is a NEW, independent service. It does not replace or modify the
 inventory agent, competitor agent, or pricing orchestrator - all three keep
 running exactly as they are. This service just subscribes to the same 3
-topics each of them already publishes to, using its own consumer group
+topics they already publish to, using its own consumer group
 ("pricing_dashboard_api") so it can never interfere with the orchestrator's
 own consumer offsets.
 
@@ -73,7 +73,7 @@ from scheduler.runner import is_running, logger as agent_logger, run_agent
 
 # -- Kafka config -----------------------------------------------------------
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-TOPICS = ["inventory-agent", "competitor-agent", "final-prices"]
+TOPICS = ["inventory-agent", "competitor-agent", "final-prices", "inventory-detailed"]
 CONSUMER_GROUP_ID = "pricing_dashboard_api"
 HISTORY_LIMIT = 20  # entries kept per (topic, sku), for timeline/trend views
 
@@ -108,12 +108,11 @@ def _check_api_key(x_api_key: Optional[str]) -> None:
 
 
 # -- Inventory agent dashboard data source -----------------------------------
-# The "/agents/inventory/*" view below reads straight from this file instead
-# of the Kafka cache - agent.py appends one full output record (the same
-# dict it prints to stdout at the end of a run) here per SKU per run. This
-# path assumes pricing_dashboard_api.py is run from the same working
-# directory as agent.py, same as PROPOSAL_LOG/VALIDATION_LOG over there.
-INVENTORY_RESULTS_LOG = "inventory_results.jsonl"
+# The "/agents/inventory/*" view below reads from the "inventory-detailed"
+# Kafka topic rather than a JSONL file. The consumer thread for this topic
+# populates the same in-memory cache (_latest / _history) used by all other
+# REST endpoints, so the inventory-detail section can serve SKU-level product
+# data (product_name, stock_on_hand, cost_price, etc.) without any file I/O.
 
 # -- In-memory state ----------------------------------------------------------
 # Guarded by one lock: the Kafka consumer runs in its own background thread
@@ -426,13 +425,11 @@ async def websocket_feed(websocket: WebSocket):
 
 
 # -- Inventory agent dashboard view -------------------------------------------
-# A dedicated, denormalized view for the inventory-agent screen specifically.
-# Unlike everything above, this is NOT built from the Kafka cache - the
-# Kafka payload agent.py publishes (agent_id/sku/recommendation/rationale)
-# never carried product-level detail (product_name, stock_on_hand, cost_price,
-# etc.), so there was nothing to read here. agent.py now also appends its
-# full per-SKU output object to INVENTORY_RESULTS_LOG on every run, and this
-# section reads straight from that file instead.
+# A dedicated, denormalized view for the inventory-agent screen, served from
+# the "inventory-detailed" Kafka topic. The topic payload includes product-
+# level detail (product_name, stock_on_hand, cost_price, etc.) that the old
+# "inventory-agent" topic's message lacked, so we now resolve data directly
+# from the Kafka stream rather than from a JSONL file.
 
 def _risk_tier(units_at_risk: float, stock_on_hand: float, days_to_expiry: float) -> str:
     """Coarse High/Medium/Low label for the dashboard's waste-risk badge."""
@@ -442,28 +439,6 @@ def _risk_tier(units_at_risk: float, stock_on_hand: float, days_to_expiry: float
     if days_to_expiry <= 3 or risk_ratio >= 0.4:
         return "MEDIUM"
     return "LOW"
-
-
-def _read_jsonl(path: str) -> List[dict]:
-    """
-    Reads a JSONL file into a list of dicts, oldest-first (files are
-    append-only, so line order is already chronological). Missing file
-    just means the agent hasn't run yet - treated as no data, not an error.
-    Malformed lines are skipped rather than failing the whole read.
-    """
-    if not os.path.exists(path):
-        return []
-    records = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return records
 
 
 def _combine_rationale(justification: dict) -> Optional[str]:
@@ -483,10 +458,10 @@ def _weekly_depletion_curve(records: List[dict], current_stock: float, avg_daily
     and takes the last stock_on_hand seen per week, oldest first, then
     appends one naive forward projection.
 
-    Caveat: this is only as good as how many runs INVENTORY_RESULTS_LOG has
-    accumulated for this SKU so far. If the inventory agent has only run a
-    few times today, this returns fewer bars rather than fabricating ones
-    that don't exist.
+    Caveat: this is only as good as how many messages the "inventory-detailed"
+    topic has accumulated for this SKU so far. If the inventory agent has
+    only run a few times today, this returns fewer bars rather than
+    fabricating ones that don't exist.
     """
     weekly: Dict[str, float] = {}
     for rec in records:
@@ -508,77 +483,71 @@ def _weekly_depletion_curve(records: List[dict], current_stock: float, avg_daily
 @app.get("/agents/inventory/skus")
 def list_inventory_skus():
     """SKU + display name pairs, for a dropdown selector."""
-    latest_by_sku: Dict[str, dict] = {}
-    for rec in _read_jsonl(INVENTORY_RESULTS_LOG):
-        sku = rec.get("sku_id")
-        if sku:
-            latest_by_sku[sku] = rec  # file is append-ordered, so the last one seen per sku is the most recent run
-
-    return [
-        {"sku": sku, "product_name": (rec.get("metrics_evaluated") or {}).get("product_name", sku)}
-        for sku, rec in sorted(latest_by_sku.items())
-    ]
+    with _lock:
+        return [
+            {"sku": sku, "product_name": (rec.get("metrics_evaluated") or {}).get("product_name", sku)}
+            for sku, rec in sorted(_latest.get("inventory-detailed", {}).items())
+        ]
 
 
 @app.get("/agents/inventory/{sku}")
 def get_inventory_detail(sku: str):
-    records = [r for r in _read_jsonl(INVENTORY_RESULTS_LOG) if r.get("sku_id") == sku]
-    if not records:
-        raise HTTPException(status_code=404, detail=f"No inventory data yet for sku={sku}")
+    with _lock:
+        latest = _latest.get("inventory-detailed", {}).get(sku)
+        if latest is None:
+            raise HTTPException(status_code=404, detail=f"No inventory data yet for sku={sku}")
 
-    latest = records[-1]  # most recent run for this sku (file is append-ordered)
-    metrics = latest.get("metrics_evaluated", {})
-    proposal = latest.get("proposal", {})
-    justification_in = latest.get("justification", {})
+        history_entries = list(_history.get("inventory-detailed", {}).get(sku, []))
+        records = [entry["payload"] for entry in history_entries]
 
-    stock_on_hand = metrics.get("stock_on_hand", 0.0)
-    units_at_risk = metrics.get("units_at_risk", 0.0)
-    days_to_expiry = metrics.get("days_to_expiry", 0.0)
-    avg_daily_units_sold = metrics.get("avg_daily_units_sold", 0.0)
-    cost_price = metrics.get("cost_price")
-    price_modifier = proposal.get("price_modifier", 1.0)
-    risk_tier = _risk_tier(units_at_risk, stock_on_hand, days_to_expiry)
+        metrics = latest.get("metrics_evaluated", {})
+        proposal = latest.get("proposal", {})
+        justification_in = latest.get("justification", {})
 
-    # "Original stock" has no real input source today (see InventoryMetrics'
-    # docstring in agent.py) - estimated as the earliest stock_on_hand this
-    # log has actually recorded for the SKU, flagged as an estimate rather
-    # than presented as a hard figure.
-    oldest_known_stock = records[0].get("metrics_evaluated", {}).get("stock_on_hand", stock_on_hand)
-    stock_coverage_pct = round(100 * stock_on_hand / oldest_known_stock, 1) if oldest_known_stock else None
+        stock_on_hand = metrics.get("stock_on_hand", 0.0)
+        units_at_risk = metrics.get("units_at_risk", 0.0)
+        days_to_expiry = metrics.get("days_to_expiry", 0.0)
+        avg_daily_units_sold = metrics.get("avg_daily_units_sold", 0.0)
+        cost_price = metrics.get("cost_price")
+        price_modifier = proposal.get("price_modifier", 1.0)
+        risk_tier = _risk_tier(units_at_risk, stock_on_hand, days_to_expiry)
 
-    required_velocity = round(units_at_risk / days_to_expiry, 1) if days_to_expiry > 0 else units_at_risk
+        oldest_known_stock = records[0].get("metrics_evaluated", {}).get("stock_on_hand", stock_on_hand) if records else stock_on_hand
+        stock_coverage_pct = round(100 * stock_on_hand / oldest_known_stock, 1) if oldest_known_stock else None
 
-    return {
-        "sku": sku,
-        "product_name": metrics.get("product_name", sku),
-        "category": metrics.get("category"),
-        "unit": metrics.get("unit"),
-        "alert": {
-            "severity": risk_tier,
-            "units_remaining": stock_on_hand,
-            "days_to_expiry": days_to_expiry,
-            "recommended_action": proposal.get("suggested_action"),
-        },
-        "metrics": {
-            "units_remaining": stock_on_hand,
-            "original_stock_estimate": oldest_known_stock,
-            "original_stock_is_estimated": True,
-            "stock_coverage_pct": stock_coverage_pct,
-            "days_to_expiry": days_to_expiry,
-            "expiry_date": None,  # not captured in agent.py's output object today - left null rather than guessed
-            "markdown_pct": round((price_modifier - 1.0) * 100, 1),
-            "cost_price": cost_price,
-        },
-        "justification": {
-            "waste_risk_tier": risk_tier,
-            "units_at_risk": units_at_risk,
-            "cost_basis_value_at_risk": round(units_at_risk * cost_price, 2) if cost_price is not None else None,
-            "daily_velocity": avg_daily_units_sold,
-            "units_to_clear": units_at_risk,
-            "required_velocity": required_velocity,
-        },
-        "depletion_curve": _weekly_depletion_curve(records, stock_on_hand, avg_daily_units_sold),
-        "reasoning": _combine_rationale(justification_in),
-        "confidence": proposal.get("confidence_score"),
-        "fallback_used": latest.get("status") == "FALLBACK",
-    }
+        required_velocity = round(units_at_risk / days_to_expiry, 1) if days_to_expiry > 0 else units_at_risk
+
+        return {
+            "sku": sku,
+            "product_name": metrics.get("product_name", sku),
+            "category": metrics.get("category"),
+            "unit": metrics.get("unit"),
+            "alert": {
+                "severity": risk_tier,
+                "units_remaining": stock_on_hand,
+                "days_to_expiry": days_to_expiry,
+                "recommended_action": proposal.get("suggested_action"),
+            },
+            "metrics": {
+                "units_remaining": stock_on_hand,
+                "original_stock_estimate": oldest_known_stock,
+                "original_stock_is_estimated": True,
+                "stock_coverage_pct": stock_coverage_pct,
+                "days_to_expiry": days_to_expiry,
+                "expiry_date": None,
+                "markdown_pct": round((price_modifier - 1.0) * 100, 1),
+                "cost_price": cost_price,
+            },
+            "justification": {
+                "waste_risk_tier": risk_tier,
+                "units_at_risk": units_at_risk,
+                "cost_basis_value_at_risk": round(units_at_risk * cost_price, 2) if cost_price is not None else None,
+                "daily_velocity": avg_daily_units_sold,
+                "units_to_clear": units_at_risk,
+                "required_velocity": required_velocity,
+            },
+            "depletion_curve": _weekly_depletion_curve(records, stock_on_hand, avg_daily_units_sold),
+            "reasoning": _combine_rationale(justification_in),
+            "confidence": proposal.get("confidence_score"),
+            "fallback_used": latest.get("status") == "FALLBACK",
+        }

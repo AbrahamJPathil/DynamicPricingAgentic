@@ -9,7 +9,6 @@ from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
 from competitor_kafka_publisher import publish_proposal, flush as kafka_flush
-from competitor_detailed_kafka_publisher import publish_report, flush as kafka_flush_detailed
 
 load_dotenv()
 
@@ -484,15 +483,6 @@ if __name__ == "__main__":
 
     # -- Ensure every buffered Kafka message is actually sent before exiting --
     kafka_flush()
-
-    # -- Publish the full detailed report to the competitor-detailed topic ------
-    # This is the complete results list (all SKUs with metrics, proposals, and
-    # justifications) — the same JSON previously only printed to the terminal.
-    # A run-scoped timestamp is used as the Kafka message key so consumers can
-    # group/identify messages by run.
-    run_key = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    publish_report(final_state["results"], key=run_key)
-    kafka_flush_detailed()
 
     logger.info("FINAL JSON OUTPUT")
     logger.info(json.dumps(final_state["results"], indent=2))

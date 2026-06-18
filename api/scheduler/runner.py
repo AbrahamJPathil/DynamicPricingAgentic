@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from agents_registry import AGENTS
+from .agents_registry import AGENTS
 
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)

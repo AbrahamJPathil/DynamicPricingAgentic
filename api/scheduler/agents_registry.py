@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Resolve paths relative to this file so the service works regardless
 # of the working directory it's launched from.
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 AGENTS = {
     "inventory": str(BASE_DIR / "agents" / "inventory" / "agent.py"),

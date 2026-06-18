@@ -24,8 +24,20 @@ auto-commit disabled) and rebuilds the cache from scratch in a few seconds.
 That keeps this service simple and stateless; the durable audit trail
 already lives in proposals.jsonl / final_prices.jsonl on each agent.
 
+This file also folds in the agent scheduler that previously ran as its own
+standalone service (scheduler/main.py). On startup it registers an hourly
+cron job for every agent in scheduler/agents_registry.py's AGENTS dict, and
+exposes a couple of small endpoints (under /agents) to inspect that schedule
+and to force an immediate one-off rerun of a single agent without disturbing
+its hourly slot. That part requires scheduler/ to sit next to this file as
+an importable package (an empty scheduler/__init__.py is enough).
+
 Run (as a standing service, in its own terminal, alongside the 3 agents):
-    uvicorn pricing_dashboard_api:app --reload --port 8000
+    AGENT_API_KEY=some-secret uvicorn pricing_dashboard_api:app --reload --port 8000
+
+Trigger a manual agent rerun with:
+    curl -X POST http://localhost:8000/agents/inventory/rerun \
+         -H "X-API-Key: some-secret"
 
 Interactive API docs once running: http://localhost:8000/docs
 """
@@ -34,21 +46,66 @@ import asyncio
 import json
 import os
 import threading
+import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Deque, Dict, List, Optional
 
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from confluent_kafka import Consumer
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+# main.py (this file's source for the agent-scheduler functionality) lived in
+# the scheduler/ subfolder and imported these two modules directly, since it
+# ran from inside that folder. This file lives one level up, in the parent
+# folder, with scheduler/ as a subfolder beneath it - hence the package-qualified
+# imports below instead of bare `import agents_registry` / `import runner`.
+# This requires scheduler/ to be an importable package (an empty __init__.py
+# in scheduler/ is enough) or to be on PYTHONPATH as a namespace package.
+from scheduler.agents_registry import AGENTS
+from scheduler.runner import is_running, logger as agent_logger, run_agent
 
 # -- Kafka config -----------------------------------------------------------
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 TOPICS = ["inventory-agent", "competitor-agent", "final-prices"]
 CONSUMER_GROUP_ID = "pricing_dashboard_api"
 HISTORY_LIMIT = 20  # entries kept per (topic, sku), for timeline/trend views
+
+# -- Agent scheduler config ---------------------------------------------------
+# Runs every agent in AGENTS on the clock hour (1:00, 2:00, 3:00, ...) and
+# exposes endpoints to force an immediate rerun of a single agent without
+# disturbing its hourly schedule. Folded in from the standalone scheduler
+# service (scheduler/main.py) so both pieces run as one process.
+#
+# Trigger a manual rerun with:
+#     curl -X POST http://localhost:8000/agents/inventory/rerun \
+#          -H "X-API-Key: some-secret"
+#
+# Shared secret required on the rerun endpoint. Set this via the
+# environment in real deployments -- the default here is only a
+# placeholder so the service doesn't crash if it's unset.
+AGENT_API_KEY = os.environ.get("AGENT_API_KEY", "change-me")
+
+scheduler = AsyncIOScheduler()
+
+
+def _on_job_event(event) -> None:
+    if event.exception:
+        agent_logger.error("Job '%s' raised an exception: %s", event.job_id, event.exception)
+    else:
+        agent_logger.info("Job '%s' completed", event.job_id)
+
+
+def _check_api_key(x_api_key: Optional[str]) -> None:
+    if x_api_key != AGENT_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
 
 # -- Inventory agent dashboard data source -----------------------------------
 # The "/agents/inventory/*" view below reads straight from this file instead
@@ -192,10 +249,30 @@ async def lifespan(app: FastAPI):
     consumer_thread.start()
     broadcaster_task = asyncio.create_task(_broadcaster())
 
+    # Agent scheduler startup (folded in from scheduler/main.py)
+    for name in AGENTS:
+        scheduler.add_job(
+            run_agent,
+            trigger=CronTrigger(minute=0),  # fires on every clock hour
+            args=[name],
+            id=name,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+            replace_existing=True,
+        )
+    scheduler.add_listener(_on_job_event, EVENT_JOB_ERROR | EVENT_JOB_EXECUTED)
+    scheduler.start()
+    agent_logger.info("Scheduler started. Hourly jobs registered for: %s", list(AGENTS))
+
     yield
 
     _stop_event.set()
     broadcaster_task.cancel()
+
+    # Agent scheduler shutdown
+    scheduler.shutdown(wait=False)
+    agent_logger.info("Scheduler stopped")
 
 
 app = FastAPI(title="Pricing Dashboard API", lifespan=lifespan)
@@ -218,6 +295,43 @@ def root():
 def get_health():
     with _lock:
         return HealthResponse(status="ok", topics={t: TopicStats(**_topic_stats[t]) for t in TOPICS})
+
+
+# -- Agent scheduler endpoints --------------------------------------------------
+# Folded in from the standalone scheduler service (scheduler/main.py).
+@app.post("/agents/{agent_name}/rerun")
+async def rerun_agent(agent_name: str, x_api_key: Optional[str] = Header(default=None)):
+    """Force an immediate one-off run of a single agent.
+
+    This does not touch that agent's hourly job -- its next scheduled
+    run stays exactly where it was. If the agent is already running
+    (scheduled or manual), this returns 409 instead of queuing a
+    second run.
+    """
+    _check_api_key(x_api_key)
+
+    if agent_name not in AGENTS:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_name}'")
+
+    if is_running(agent_name):
+        raise HTTPException(status_code=409, detail=f"Agent '{agent_name}' is already running")
+
+    job_id = f"{agent_name}_manual_{int(time.time())}"
+    scheduler.add_job(run_agent, trigger=DateTrigger(), args=[agent_name], id=job_id)
+
+    return {"status": "scheduled", "agent": agent_name, "job_id": job_id}
+
+
+@app.get("/agents")
+async def list_agents():
+    """Lists known agents and when each is next due to run on its
+    regular hourly schedule."""
+    next_runs = {}
+    for job in scheduler.get_jobs():
+        if job.id in AGENTS:
+            next_runs[job.id] = job.next_run_time.isoformat() if job.next_run_time else None
+
+    return {"agents": list(AGENTS.keys()), "next_scheduled_run": next_runs}
 
 
 @app.get("/skus", response_model=List[SKUSummary])

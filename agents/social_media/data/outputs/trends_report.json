@@ -1,0 +1,11 @@
+[
+  {
+    "agent_id": "social_trends_pricing",
+    "sku": "ALL_SKUS",
+    "confidence": 0.0,
+    "recommendation": {
+      "suggested_modifier": 0.0
+    },
+    "rationale": "Agent halted at CSV load stage. Error: CSV_LOAD_ERROR: [Errno 2] No such file or directory: 'C:\\\\Users\\\\311193\\\\DynamicPricingAgentic\\\\agents\\\\social_media\\\\data\\\\db\\\\products_common.csv'"
+  }
+]

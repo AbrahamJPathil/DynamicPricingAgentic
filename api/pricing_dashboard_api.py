@@ -168,7 +168,7 @@ class MetricsResponse(BaseModel):
 # -- Kafka consumer (runs in a background thread, never on the event loop) --
 def _ingest(topic: str, payload: dict, received_at: Optional[str] = None) -> None:
     """Updates the in-memory cache for one incoming message. Called from the consumer thread."""
-    sku = payload.get("sku", "UNKNOWN")
+    sku = payload.get("sku") or payload.get("sku_id", "UNKNOWN")
     received_at = received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _lock:
         _latest[topic][sku] = payload

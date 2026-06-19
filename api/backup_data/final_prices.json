@@ -1,0 +1,81 @@
+{
+  "latest": {
+    "MEA001": {
+      "sku": "MEA001",
+      "status": "FALLBACK",
+      "timestamp": "2026-06-18T18:30:00Z",
+      "final_recommendation": {
+        "action": "DISCOUNT",
+        "suggested_modifier": 0.58,
+        "confidence": 0.0
+      }
+    },
+    "MEA002": {
+      "sku": "MEA002",
+      "status": "COMPLETED",
+      "timestamp": "2026-06-18T18:05:00Z",
+      "final_recommendation": {
+        "action": "SURCHARGE",
+        "suggested_modifier": 1.1097,
+        "confidence": 0.7
+      }
+    },
+    "DAI001": {
+      "sku": "DAI001",
+      "status": "COMPLETED",
+      "timestamp": "2026-06-18T17:50:00Z",
+      "final_recommendation": {
+        "action": "DISCOUNT",
+        "suggested_modifier": 0.75,
+        "confidence": 0.72
+      }
+    }
+  },
+  "history": {
+    "MEA001": [
+      {
+        "received_at": "2026-06-18T18:30:00Z",
+        "payload": {
+          "sku": "MEA001",
+          "status": "FALLBACK",
+          "timestamp": "2026-06-18T18:30:00Z",
+          "final_recommendation": {
+            "action": "DISCOUNT",
+            "suggested_modifier": 0.58,
+            "confidence": 0.0
+          }
+        }
+      }
+    ],
+    "MEA002": [
+      {
+        "received_at": "2026-06-18T18:05:00Z",
+        "payload": {
+          "sku": "MEA002",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T18:05:00Z",
+          "final_recommendation": {
+            "action": "SURCHARGE",
+            "suggested_modifier": 1.1097,
+            "confidence": 0.7
+          }
+        }
+      }
+    ],
+    "DAI001": [
+      {
+        "received_at": "2026-06-18T17:50:00Z",
+        "payload": {
+          "sku": "DAI001",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T17:50:00Z",
+          "final_recommendation": {
+            "action": "DISCOUNT",
+            "suggested_modifier": 0.75,
+            "confidence": 0.72
+          }
+        }
+      }
+    ]
+  }
+}

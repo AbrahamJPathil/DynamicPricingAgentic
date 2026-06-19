@@ -1,0 +1,69 @@
+{
+  "latest": {
+    "MEA002": {
+      "sku": "MEA002",
+      "recommendation": {
+        "suggested_modifier": 0.1097,
+        "confidence": 0.7
+      },
+      "rationale": "Margin Expansion Opportunity. Kroger prices ($7.99) are higher than ours ($7.20) by 9.9%. A 11.0% surcharge captures margin while remaining competitive."
+    },
+    "MEA001": {
+      "sku": "MEA001",
+      "recommendation": {
+        "suggested_modifier": -0.05,
+        "confidence": 0.65
+      },
+      "rationale": "Competitor pricing lower by 5%, small markdown recommended to stay competitive"
+    },
+    "DAI001": {
+      "sku": "DAI001",
+      "recommendation": {
+        "suggested_modifier": 0.03,
+        "confidence": 0.55
+      },
+      "rationale": "Minor price adjustment to match market position"
+    }
+  },
+  "history": {
+    "MEA002": [
+      {
+        "received_at": "2026-06-18T18:00:04Z",
+        "payload": {
+          "sku": "MEA002",
+          "recommendation": {
+            "suggested_modifier": 0.1097,
+            "confidence": 0.7
+          },
+          "rationale": "Margin Expansion Opportunity. Kroger prices ($7.99) are higher than ours ($7.20) by 9.9%. A 11.0% surcharge captures margin while remaining competitive."
+        }
+      }
+    ],
+    "MEA001": [
+      {
+        "received_at": "2026-06-18T18:00:00Z",
+        "payload": {
+          "sku": "MEA001",
+          "recommendation": {
+            "suggested_modifier": -0.05,
+            "confidence": 0.65
+          },
+          "rationale": "Competitor pricing lower by 5%, small markdown recommended to stay competitive"
+        }
+      }
+    ],
+    "DAI001": [
+      {
+        "received_at": "2026-06-18T17:45:00Z",
+        "payload": {
+          "sku": "DAI001",
+          "recommendation": {
+            "suggested_modifier": 0.03,
+            "confidence": 0.55
+          },
+          "rationale": "Minor price adjustment to match market position"
+        }
+      }
+    ]
+  }
+}

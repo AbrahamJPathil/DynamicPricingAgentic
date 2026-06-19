@@ -1,0 +1,87 @@
+{
+  "latest": {
+    "MEA001": {
+      "sku": "MEA001",
+      "recommendation": {
+        "action": "DISCOUNT",
+        "suggested_modifier": 0.58,
+        "confidence": 0.0
+      },
+      "rationale": "Rule-based fallback applied - LLM output failed validation"
+    },
+    "MEA002": {
+      "sku": "MEA002",
+      "recommendation": {
+        "action": "HOLD",
+        "suggested_modifier": 1.0,
+        "confidence": 0.85
+      },
+      "rationale": "Stock levels adequate, no action needed"
+    },
+    "DAI001": {
+      "sku": "DAI001",
+      "recommendation": {
+        "action": "DISCOUNT",
+        "suggested_modifier": 0.75,
+        "confidence": 0.72
+      },
+      "rationale": "Near-expiry stock, moderate discount recommended"
+    }
+  },
+  "history": {
+    "MEA001": [
+      {
+        "received_at": "2026-06-18T17:24:50Z",
+        "payload": {
+          "sku": "MEA001",
+          "recommendation": {
+            "action": "HOLD",
+            "suggested_modifier": 1.0,
+            "confidence": 0.6
+          },
+          "rationale": "Initial evaluation - insufficient data"
+        }
+      },
+      {
+        "received_at": "2026-06-18T18:24:50Z",
+        "payload": {
+          "sku": "MEA001",
+          "recommendation": {
+            "action": "DISCOUNT",
+            "suggested_modifier": 0.58,
+            "confidence": 0.0
+          },
+          "rationale": "Rule-based fallback applied - LLM output failed validation"
+        }
+      }
+    ],
+    "MEA002": [
+      {
+        "received_at": "2026-06-18T17:00:04Z",
+        "payload": {
+          "sku": "MEA002",
+          "recommendation": {
+            "action": "HOLD",
+            "suggested_modifier": 1.0,
+            "confidence": 0.85
+          },
+          "rationale": "Stock levels adequate, no action needed"
+        }
+      }
+    ],
+    "DAI001": [
+      {
+        "received_at": "2026-06-18T16:30:00Z",
+        "payload": {
+          "sku": "DAI001",
+          "recommendation": {
+            "action": "DISCOUNT",
+            "suggested_modifier": 0.75,
+            "confidence": 0.72
+          },
+          "rationale": "Near-expiry stock, moderate discount recommended"
+        }
+      }
+    ]
+  }
+}

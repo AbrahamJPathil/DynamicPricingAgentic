@@ -60,6 +60,7 @@ from confluent_kafka import Consumer, OFFSET_BEGINNING
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from supabase import create_client
 
 # main.py (this file's source for the agent-scheduler functionality) lived in
 # the scheduler/ subfolder and imported these two modules directly, since it
@@ -93,6 +94,11 @@ HISTORY_LIMIT = 20  # entries kept per (topic, sku), for timeline/trend views
 AGENT_API_KEY = os.environ.get("AGENT_API_KEY", "change-me")
 
 scheduler = AsyncIOScheduler()
+
+supabase = create_client(
+    os.getenv("SUPABASE_URL","https://gmqstxrmaloqymmvirce.supabase.co"),
+    os.getenv("SUPABASE_SERVICE_KEY","eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdtcXN0eHJtYWxvcXltbXZpcmNlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTcxNDQ0MSwiZXhwIjoyMDk3MjkwNDQxfQ.1HacsMZoUYM3Dzuix858BYatmyPDwQh3lnZSQhG9ViU")
+)
 
 
 def _on_job_event(event) -> None:
@@ -362,7 +368,78 @@ def get_health():
     with _lock:
         return HealthResponse(status="ok", topics={t: TopicStats(**_topic_stats[t]) for t in TOPICS})
 
+@app.get("/kpis")
+def get_kpis():
+    try:
+        response = (
+            supabase
+            .table("kpi_values")
+            .select("*")
+            .execute()
+        )
 
+        return {
+            "success": True,
+            "count": len(response.data),
+            "data": response.data
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+@app.get("/kpis/dashboard")
+def get_dashboard_kpis():
+    try:
+        response = (
+            supabase
+            .table("dashboard_kpis")
+            .select("*")
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=404,
+                detail="No dashboard KPI data found"
+            )
+
+        return {
+            "success": True,
+            "data": response.data[0]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+        
+@app.get("/kpis/{sku_id}")
+def get_kpi_by_sku(sku_id: str):
+    try:
+        response = (
+            supabase
+            .table("kpi_values")
+            .select("*")
+            .eq("sku_id", sku_id)
+            .execute()
+        )
+
+        return {
+            "success": True,
+            "data": response.data
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 # -- Agent scheduler endpoints --------------------------------------------------
 # Folded in from the standalone scheduler service (scheduler/main.py).
 @app.post("/agents/{agent_name}/rerun")

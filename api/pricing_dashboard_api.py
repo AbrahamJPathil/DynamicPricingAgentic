@@ -56,7 +56,7 @@ from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, OFFSET_BEGINNING
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -192,21 +192,57 @@ def _ingest(topic: str, payload: dict, received_at: Optional[str] = None) -> Non
         _event_loop.call_soon_threadsafe(_broadcast_queue.put_nowait, envelope)
 
 
-def _consume_loop(stop_event: threading.Event) -> None:
-    """Polls all 3 topics into the cache until stop_event is set."""
+def _on_assign(consumer: Consumer, partitions: list) -> None:
+    """
+    Fires on every partition (re)assignment, including the very first one
+    right after startup. Forces every partition to start at the true
+    beginning, overriding whatever offset this group.id may have
+    committed in a past life (a stray manual consumer reusing this group
+    name, an earlier version of this service, a debugging session, etc).
+
+    This matters because "auto.offset.reset": "earliest" is only a
+    fallback used when Kafka has NO committed offset on record for the
+    group - it does not guarantee a fresh replay on every restart. If a
+    commit ever happened under this group id, the consumer would silently
+    resume from there instead, permanently hiding any SKU whose messages
+    sit before that offset (showing up as 404s for data that genuinely
+    exists on the topic). Explicitly seeking to OFFSET_BEGINNING here
+    makes the "every restart replays everything" behavior actually true,
+    independent of broker-side history.
+    """
+    for p in partitions:
+        p.offset = OFFSET_BEGINNING
+    consumer.assign(partitions)
+    print(f"[dashboard-consumer] Assigned {len(partitions)} partition(s), seeking to beginning")
+
+
+def _consume_loop(stop_event: threading.Event, ready_event: threading.Event) -> None:
+    """
+    Polls all 5 topics into the cache until stop_event is set.
+
+    ready_event is set once the initial backlog has been fully drained
+    (the first poll() that comes back empty after assignment). The app's
+    lifespan waits on this before serving traffic, so a request landing
+    in the first second or two after startup can't 404 on a SKU that
+    genuinely has data simply because this thread hasn't caught up yet.
+    """
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
         "group.id": CONSUMER_GROUP_ID,
-        "auto.offset.reset": "earliest",
         "enable.auto.commit": False,  # never persist offsets - replay everything on every restart
     })
-    consumer.subscribe(TOPICS)
+    consumer.subscribe(TOPICS, on_assign=_on_assign)
     print(f"[dashboard-consumer] Subscribed to: {TOPICS}")
 
+    caught_up = False
     try:
         while not stop_event.is_set():
             msg = consumer.poll(1.0)
             if msg is None:
+                if not caught_up:
+                    caught_up = True
+                    ready_event.set()
+                    print("[dashboard-consumer] Initial backlog drained, cache is warm")
                 continue
             if msg.error():
                 print(f"[dashboard-consumer] [ERROR] {msg.error()}")
@@ -248,6 +284,8 @@ async def _broadcaster() -> None:
 
 # -- App lifecycle --------------------------------------------------------------
 _stop_event = threading.Event()
+_consumer_ready = threading.Event()
+CONSUMER_READY_TIMEOUT = 30.0  # seconds to wait for the initial backlog to drain before serving anyway
 
 
 @asynccontextmanager
@@ -256,9 +294,26 @@ async def lifespan(app: FastAPI):
     _event_loop = asyncio.get_running_loop()
     _broadcast_queue = asyncio.Queue()
 
-    consumer_thread = threading.Thread(target=_consume_loop, args=(_stop_event,), daemon=True)
+    consumer_thread = threading.Thread(
+        target=_consume_loop, args=(_stop_event, _consumer_ready), daemon=True
+    )
     consumer_thread.start()
     broadcaster_task = asyncio.create_task(_broadcaster())
+
+    # Hold off serving traffic until the consumer has drained the existing
+    # backlog on all 5 topics, so an early request can't 404 on a SKU that
+    # genuinely has data simply because the cache hasn't caught up yet.
+    became_ready = await _event_loop.run_in_executor(
+        None, _consumer_ready.wait, CONSUMER_READY_TIMEOUT
+    )
+    if became_ready:
+        agent_logger.info("Kafka consumer caught up - cache is warm")
+    else:
+        agent_logger.warning(
+            "Kafka consumer did not catch up within %.0fs - serving traffic anyway; "
+            "early requests may 404 until it catches up",
+            CONSUMER_READY_TIMEOUT,
+        )
 
     # Agent scheduler startup (folded in from scheduler/main.py)
     for name in AGENTS:
@@ -635,9 +690,9 @@ def get_competitor_detail(sku: str):
         history_entries = list(_history.get("competitor-detailed", {}).get(sku, []))
         records = [entry["payload"] for entry in history_entries]
 
-        metrics = latest.get("metrics_evaluated", {})
-        proposal = latest.get("proposal", {})
-        justification_in = latest.get("justification", {})
+        metrics = latest.get("metrics_evaluated") or {}
+        proposal = latest.get("proposal") or {}
+        justification_in = latest.get("justification") or {}
 
         our_price = metrics.get("our_current_price")
         comp_price = metrics.get("competitor_price")

@@ -442,11 +442,7 @@ def get_kpi_by_sku(sku_id: str):
         )
         
 # -- Customer-facing items (Supabase) -----------------------------------------
-# Read-only endpoints serving the "customer_facing_items" table - this is the
-# table the in-aisle display (Next.js app) ultimately reads prices from.
-# Same pattern as the /kpis endpoints above: query Supabase directly, no
-# Kafka/cache involvement, since this table is written by a separate process
-# and just needs to be exposed for the frontend to consume.
+
 
 def _clean_customer_item(item: dict) -> dict:
     """
@@ -466,7 +462,7 @@ def list_customer_items():
             supabase
             .table("customer_facing_items")
             .select("*")
-            .order("idx")
+            .order("sku_id")
             .execute()
         )
 
@@ -493,7 +489,7 @@ def list_customer_items_by_category(item_category: str):
             .table("customer_facing_items")
             .select("*")
             .eq("item_category", item_category)
-            .order("idx")
+            .order("sku_id")
             .execute()
         )
 

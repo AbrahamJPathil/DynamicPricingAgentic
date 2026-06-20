@@ -1,0 +1,227 @@
+{
+  "latest": {
+    "MEA001": {
+      "agent_id": "inventory_perishability",
+      "sku_id": "MEA001",
+      "status": "FALLBACK",
+      "timestamp": "2026-06-18T18:24:50Z",
+      "metrics_evaluated": {
+        "product_name": "Rotisserie Chicken",
+        "category": "meat",
+        "unit": "2.25lb",
+        "stock_on_hand": 38,
+        "days_to_expiry": 0.62,
+        "avg_daily_units_sold": 14.0,
+        "units_sold_last_24h": 6,
+        "units_at_risk": 29.28,
+        "cost_price": 4.0,
+        "expiry_loss_rate": 0.42,
+        "loss_if_no_action": 49.19
+      },
+      "proposal": {
+        "suggested_action": "DISCOUNT",
+        "price_modifier": 0.58,
+        "confidence_score": 0.0,
+        "urgency": "IMMEDIATE"
+      },
+      "justification": {
+        "headline": "Fallback proposal - LLM output failed validation",
+        "detailed_reasoning": "Rule-based fallback applied. 29.28 units at risk with 0.62 days to expiry. Modifier 0.58 derived from risk ratio 0.77, floored at recovery rate 0.58 (buyback=0.07 + repurposing=0.51). Manual review required."
+      }
+    },
+    "MEA002": {
+      "agent_id": "inventory_perishability",
+      "sku_id": "MEA002",
+      "status": "COMPLETED",
+      "timestamp": "2026-06-18T17:00:04Z",
+      "metrics_evaluated": {
+        "product_name": "Ground Beef 80/20",
+        "category": "meat",
+        "unit": "1lb",
+        "stock_on_hand": 120,
+        "days_to_expiry": 5.0,
+        "avg_daily_units_sold": 18.0,
+        "units_sold_last_24h": 15,
+        "units_at_risk": 30.0,
+        "cost_price": 5.5,
+        "expiry_loss_rate": 0.15,
+        "loss_if_no_action": 24.75
+      },
+      "proposal": {
+        "suggested_action": "HOLD",
+        "price_modifier": 1.0,
+        "confidence_score": 0.85,
+        "urgency": "LOW"
+      },
+      "justification": {
+        "headline": "Stock levels healthy",
+        "detailed_reasoning": "Current stock of 120 units with 5 days to expiry and 18 avg daily units sold. Projected depletion before expiry. No action required."
+      }
+    },
+    "DAI001": {
+      "agent_id": "inventory_perishability",
+      "sku_id": "DAI001",
+      "status": "COMPLETED",
+      "timestamp": "2026-06-18T16:30:00Z",
+      "metrics_evaluated": {
+        "product_name": "Greek Yogurt Plain",
+        "category": "dairy",
+        "unit": "32oz",
+        "stock_on_hand": 85,
+        "days_to_expiry": 3.0,
+        "avg_daily_units_sold": 22.0,
+        "units_sold_last_24h": 20,
+        "units_at_risk": 19.0,
+        "cost_price": 6.99,
+        "expiry_loss_rate": 0.08,
+        "loss_if_no_action": 10.62
+      },
+      "proposal": {
+        "suggested_action": "DISCOUNT",
+        "price_modifier": 0.75,
+        "confidence_score": 0.72,
+        "urgency": "MEDIUM"
+      },
+      "justification": {
+        "headline": "Moderate waste risk detected",
+        "detailed_reasoning": "19 units at risk with 3 days to expiry. Recommended 25% markdown to accelerate sell-through."
+      }
+    }
+  },
+  "history": {
+    "MEA001": [
+      {
+        "received_at": "2026-06-18T17:24:50Z",
+        "payload": {
+          "agent_id": "inventory_perishability",
+          "sku_id": "MEA001",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T17:24:50Z",
+          "metrics_evaluated": {
+            "product_name": "Rotisserie Chicken",
+            "category": "meat",
+            "unit": "2.25lb",
+            "stock_on_hand": 45,
+            "days_to_expiry": 1.62,
+            "avg_daily_units_sold": 14.0,
+            "units_sold_last_24h": 12,
+            "units_at_risk": 22.32,
+            "cost_price": 4.0,
+            "expiry_loss_rate": 0.35,
+            "loss_if_no_action": 31.25
+          },
+          "proposal": {
+            "suggested_action": "DISCOUNT",
+            "price_modifier": 0.65,
+            "confidence_score": 0.6,
+            "urgency": "HIGH"
+          },
+          "justification": {
+            "headline": "Waste risk detected",
+            "detailed_reasoning": "22.32 units at risk. Recommended 35% markdown."
+          }
+        }
+      },
+      {
+        "received_at": "2026-06-18T18:24:50Z",
+        "payload": {
+          "agent_id": "inventory_perishability",
+          "sku_id": "MEA001",
+          "status": "FALLBACK",
+          "timestamp": "2026-06-18T18:24:50Z",
+          "metrics_evaluated": {
+            "product_name": "Rotisserie Chicken",
+            "category": "meat",
+            "unit": "2.25lb",
+            "stock_on_hand": 38,
+            "days_to_expiry": 0.62,
+            "avg_daily_units_sold": 14.0,
+            "units_sold_last_24h": 6,
+            "units_at_risk": 29.28,
+            "cost_price": 4.0,
+            "expiry_loss_rate": 0.42,
+            "loss_if_no_action": 49.19
+          },
+          "proposal": {
+            "suggested_action": "DISCOUNT",
+            "price_modifier": 0.58,
+            "confidence_score": 0.0,
+            "urgency": "IMMEDIATE"
+          },
+          "justification": {
+            "headline": "Fallback proposal - LLM output failed validation",
+            "detailed_reasoning": "Rule-based fallback applied. 29.28 units at risk with 0.62 days to expiry. Modifier 0.58 derived from risk ratio 0.77, floored at recovery rate 0.58 (buyback=0.07 + repurposing=0.51). Manual review required."
+          }
+        }
+      }
+    ],
+    "MEA002": [
+      {
+        "received_at": "2026-06-18T17:00:04Z",
+        "payload": {
+          "agent_id": "inventory_perishability",
+          "sku_id": "MEA002",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T17:00:04Z",
+          "metrics_evaluated": {
+            "product_name": "Ground Beef 80/20",
+            "category": "meat",
+            "unit": "1lb",
+            "stock_on_hand": 120,
+            "days_to_expiry": 5.0,
+            "avg_daily_units_sold": 18.0,
+            "units_sold_last_24h": 15,
+            "units_at_risk": 30.0,
+            "cost_price": 5.5,
+            "expiry_loss_rate": 0.15,
+            "loss_if_no_action": 24.75
+          },
+          "proposal": {
+            "suggested_action": "HOLD",
+            "price_modifier": 1.0,
+            "confidence_score": 0.85,
+            "urgency": "LOW"
+          },
+          "justification": {
+            "headline": "Stock levels healthy",
+            "detailed_reasoning": "Current stock of 120 units with 5 days to expiry and 18 avg daily units sold. Projected depletion before expiry. No action required."
+          }
+        }
+      }
+    ],
+    "DAI001": [
+      {
+        "received_at": "2026-06-18T16:30:00Z",
+        "payload": {
+          "agent_id": "inventory_perishability",
+          "sku_id": "DAI001",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T16:30:00Z",
+          "metrics_evaluated": {
+            "product_name": "Greek Yogurt Plain",
+            "category": "dairy",
+            "unit": "32oz",
+            "stock_on_hand": 85,
+            "days_to_expiry": 3.0,
+            "avg_daily_units_sold": 22.0,
+            "units_sold_last_24h": 20,
+            "units_at_risk": 19.0,
+            "cost_price": 6.99,
+            "expiry_loss_rate": 0.08,
+            "loss_if_no_action": 10.62
+          },
+          "proposal": {
+            "suggested_action": "DISCOUNT",
+            "price_modifier": 0.75,
+            "confidence_score": 0.72,
+            "urgency": "MEDIUM"
+          },
+          "justification": {
+            "headline": "Moderate waste risk detected",
+            "detailed_reasoning": "19 units at risk with 3 days to expiry. Recommended 25% markdown to accelerate sell-through."
+          }
+        }
+      }
+    ]
+  }
+}

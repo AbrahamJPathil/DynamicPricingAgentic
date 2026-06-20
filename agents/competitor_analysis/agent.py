@@ -9,6 +9,7 @@ from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
 from competitor_kafka_publisher import publish_proposal, flush as kafka_flush
+from competitor_detailed_kafka_publisher import publish_report, flush as kafka_flush_detailed
 
 load_dotenv()
 
@@ -509,6 +510,15 @@ if __name__ == "__main__":
 
     # -- Ensure every buffered Kafka message is actually sent before exiting --
     kafka_flush()
+
+    # -- Publish one detailed message per SKU to the competitor-detailed topic --
+    # Each result entry (full metrics, proposal, and justification) is published
+    # as its own Kafka message keyed by SKU, consistent with how the slim
+    # competitor-agent topic works.
+    for entry in final_state["results"]:
+        sku = entry["metrics_evaluated"]["sku"]
+        publish_report(entry, key=sku)
+    kafka_flush_detailed()
 
     logger.info("FINAL JSON OUTPUT")
     logger.info(json.dumps(final_state["results"], indent=2))

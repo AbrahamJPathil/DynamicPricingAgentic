@@ -24,7 +24,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from kafka_publisher import publish_proposal, flush as kafka_flush
+from kafka_publisher import publish_detailed, publish_proposal, flush as kafka_flush
 
 # -- Audit log paths ------------------------------------------------------------
 PROPOSAL_LOG = "proposals.jsonl"
@@ -1071,6 +1071,7 @@ def main():
     for output in final_state["results"]:
         print(json.dumps(output, indent=2))
         print()
+        publish_detailed(output, key=output["sku_id"])
 
 
 if __name__ == "__main__":

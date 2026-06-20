@@ -20,6 +20,7 @@ from confluent_kafka import Producer
 
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 TOPIC = "inventory-agent"
+TOPIC_DETAILED = "inventory-detailed"
 
 _producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
@@ -47,6 +48,20 @@ def publish_proposal(payload: dict, key: Optional[str] = None) -> None:
         callback=_delivery_report,
     )
     # Triggers any pending delivery-report callbacks without blocking.
+    _producer.poll(0)
+
+
+def publish_detailed(payload: dict, key: Optional[str] = None) -> None:
+    """
+    Serializes payload to JSON and produces it onto the inventory-detailed topic.
+    Non-blocking - message is buffered and sent asynchronously.
+    """
+    _producer.produce(
+        topic=TOPIC_DETAILED,
+        key=key.encode("utf-8") if key else None,
+        value=json.dumps(payload).encode("utf-8"),
+        callback=_delivery_report,
+    )
     _producer.poll(0)
 
 

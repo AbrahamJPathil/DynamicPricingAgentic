@@ -1,0 +1,135 @@
+{
+  "latest": {
+    "MEA002": {
+      "agent_id": "competitor_pricing",
+      "status": "COMPLETED",
+      "timestamp": "2026-06-18T18:00:04Z",
+      "metrics_evaluated": {
+        "sku": "MEA002",
+        "our_current_price": 7.2,
+        "competitor_price": 7.99
+      },
+      "proposal": {
+        "suggested_action": "SURCHARGE",
+        "price_modifier": 1.1097,
+        "confidence_score": 0.7
+      },
+      "justification": {
+        "headline": "Margin Expansion Opportunity",
+        "detailed_reasoning": "Kroger prices ($7.99) are higher than ours ($7.20) by 9.9%. A 11.0% surcharge captures margin while remaining competitive."
+      }
+    },
+    "MEA001": {
+      "agent_id": "competitor_pricing",
+      "status": "COMPLETED",
+      "timestamp": "2026-06-18T18:00:00Z",
+      "metrics_evaluated": {
+        "sku": "MEA001",
+        "our_current_price": 4.99,
+        "competitor_price": 4.75
+      },
+      "proposal": {
+        "suggested_action": "MARKDOWN",
+        "price_modifier": 0.95,
+        "confidence_score": 0.65
+      },
+      "justification": {
+        "headline": "Competitive pressure detected",
+        "detailed_reasoning": "Competitor pricing at $4.75 is 4.8% below our price of $4.99. A 5% markdown recommended to maintain competitiveness."
+      }
+    },
+    "DAI001": {
+      "agent_id": "competitor_pricing",
+      "status": "COMPLETED",
+      "timestamp": "2026-06-18T17:45:00Z",
+      "metrics_evaluated": {
+        "sku": "DAI001",
+        "our_current_price": 6.99,
+        "competitor_price": 7.15
+      },
+      "proposal": {
+        "suggested_action": "HOLD",
+        "price_modifier": 1.0,
+        "confidence_score": 0.55
+      },
+      "justification": {
+        "headline": "Competitor position stable",
+        "detailed_reasoning": "Competitor price ($7.15) is 2.3% above ours ($6.99). No adjustment required."
+      }
+    }
+  },
+  "history": {
+    "MEA002": [
+      {
+        "received_at": "2026-06-18T18:00:04Z",
+        "payload": {
+          "agent_id": "competitor_pricing",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T18:00:04Z",
+          "metrics_evaluated": {
+            "sku": "MEA002",
+            "our_current_price": 7.2,
+            "competitor_price": 7.99
+          },
+          "proposal": {
+            "suggested_action": "SURCHARGE",
+            "price_modifier": 1.1097,
+            "confidence_score": 0.7
+          },
+          "justification": {
+            "headline": "Margin Expansion Opportunity",
+            "detailed_reasoning": "Kroger prices ($7.99) are higher than ours ($7.20) by 9.9%. A 11.0% surcharge captures margin while remaining competitive."
+          }
+        }
+      }
+    ],
+    "MEA001": [
+      {
+        "received_at": "2026-06-18T18:00:00Z",
+        "payload": {
+          "agent_id": "competitor_pricing",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T18:00:00Z",
+          "metrics_evaluated": {
+            "sku": "MEA001",
+            "our_current_price": 4.99,
+            "competitor_price": 4.75
+          },
+          "proposal": {
+            "suggested_action": "MARKDOWN",
+            "price_modifier": 0.95,
+            "confidence_score": 0.65
+          },
+          "justification": {
+            "headline": "Competitive pressure detected",
+            "detailed_reasoning": "Competitor pricing at $4.75 is 4.8% below our price of $4.99. A 5% markdown recommended to maintain competitiveness."
+          }
+        }
+      }
+    ],
+    "DAI001": [
+      {
+        "received_at": "2026-06-18T17:45:00Z",
+        "payload": {
+          "agent_id": "competitor_pricing",
+          "status": "COMPLETED",
+          "timestamp": "2026-06-18T17:45:00Z",
+          "metrics_evaluated": {
+            "sku": "DAI001",
+            "our_current_price": 6.99,
+            "competitor_price": 7.15
+          },
+          "proposal": {
+            "suggested_action": "HOLD",
+            "price_modifier": 1.0,
+            "confidence_score": 0.55
+          },
+          "justification": {
+            "headline": "Competitor position stable",
+            "detailed_reasoning": "Competitor price ($7.15) is 2.3% above ours ($6.99). No adjustment required."
+          }
+        }
+      }
+    ]
+  }
+}

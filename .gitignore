@@ -4,3 +4,13 @@ agents/inventory/proposals.jsonl
 agents/inventory/validations.jsonl
 api/virtual_clock
 .env
+venv/
+agents/event_agent/event_agent_proposals.jsonl
+agents/event_agent/event_agent_validations.jsonl
+agents/event_agent/mock_kafka/
+agents/event_agent/event_proposals.jsonl
+agents/event_agent/event_validations.jsonl
+agents/event_agent/calendar_proposals.jsonl
+agents/event_agent/calendar_validations.jsonl
+data/inputs/event_agent/event_data.csv
+__pycache__/

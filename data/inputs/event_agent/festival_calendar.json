@@ -1,0 +1,379 @@
+[
+  {
+    "name": "New Year's Day",
+    "month": 1,
+    "day": 1,
+    "date_hint": "2026-01-01",
+    "base_lift": 1.2,
+    "categories": [
+      "beverages",
+      "snacks",
+      "dairy",
+      "meat",
+      "bakery",
+      "produce"
+    ],
+    "surcharge_exempt": [
+      "dairy",
+      "produce"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Valentine's Day",
+    "month": 2,
+    "day": 14,
+    "date_hint": "2026-02-14",
+    "base_lift": 1.3,
+    "categories": [
+      "sweets",
+      "bakery",
+      "beverages",
+      "dairy"
+    ],
+    "surcharge_exempt": [
+      "dairy"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Ramadan Start",
+    "month": 2,
+    "day": 18,
+    "date_hint": "2026-02-18",
+    "base_lift": 1.55,
+    "categories": [
+      "meat",
+      "dairy",
+      "sweets",
+      "bakery",
+      "spices",
+      "produce",
+      "beverages",
+      "snacks"
+    ],
+    "surcharge_exempt": [
+      "produce",
+      "snacks"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Eid al-Fitr",
+    "month": 3,
+    "day": 20,
+    "date_hint": "2026-03-20",
+    "base_lift": 1.6,
+    "categories": [
+      "sweets",
+      "meat",
+      "bakery",
+      "beverages",
+      "dairy",
+      "spices",
+      "produce"
+    ],
+    "surcharge_exempt": [
+      "produce",
+      "spices"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Easter Sunday",
+    "month": 4,
+    "day": 5,
+    "date_hint": "2026-04-05",
+    "base_lift": 1.3,
+    "categories": [
+      "dairy",
+      "bakery",
+      "produce",
+      "meat",
+      "sweets",
+      "beverages"
+    ],
+    "surcharge_exempt": [
+      "produce",
+      "beverages"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Mother's Day",
+    "month": 5,
+    "day": 10,
+    "date_hint": "2026-05-10",
+    "base_lift": 1.15,
+    "categories": [
+      "sweets",
+      "bakery",
+      "beverages",
+      "dairy",
+      "produce"
+    ],
+    "surcharge_exempt": [
+      "produce",
+      "dairy"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Memorial Day",
+    "month": 5,
+    "day": 25,
+    "date_hint": "2026-05-25",
+    "base_lift": 1.35,
+    "categories": [
+      "meat",
+      "beverages",
+      "snacks",
+      "produce",
+      "dairy"
+    ],
+    "surcharge_exempt": [
+      "dairy",
+      "produce"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Eid al-Adha",
+    "month": 5,
+    "day": 27,
+    "date_hint": "2026-05-27",
+    "base_lift": 1.75,
+    "categories": [
+      "meat",
+      "sweets",
+      "dairy",
+      "bakery",
+      "spices",
+      "produce",
+      "beverages",
+      "snacks"
+    ],
+    "surcharge_exempt": [
+      "produce",
+      "snacks"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Father's Day",
+    "month": 6,
+    "day": 21,
+    "date_hint": "2026-06-21",
+    "base_lift": 1.1,
+    "categories": [
+      "meat",
+      "beverages",
+      "snacks",
+      "dairy"
+    ],
+    "surcharge_exempt": [
+      "dairy",
+      "snacks"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Independence Day (US)",
+    "month": 7,
+    "day": 4,
+    "date_hint": "2026-07-04",
+    "base_lift": 1.4,
+    "categories": [
+      "meat",
+      "beverages",
+      "snacks",
+      "produce",
+      "dairy",
+      "bakery"
+    ],
+    "surcharge_exempt": [
+      "dairy",
+      "bakery"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Labor Day",
+    "month": 9,
+    "day": 7,
+    "date_hint": "2026-09-07",
+    "base_lift": 1.3,
+    "categories": [
+      "meat",
+      "beverages",
+      "snacks",
+      "produce",
+      "dairy"
+    ],
+    "surcharge_exempt": [
+      "dairy",
+      "produce"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Halloween",
+    "month": 10,
+    "day": 31,
+    "date_hint": "2026-10-31",
+    "base_lift": 1.45,
+    "categories": [
+      "sweets",
+      "snacks",
+      "beverages",
+      "bakery"
+    ],
+    "surcharge_exempt": [
+      "beverages"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Diwali",
+    "month": 11,
+    "day": 8,
+    "date_hint": "2026-11-08",
+    "base_lift": 1.4,
+    "categories": [
+      "sweets",
+      "snacks",
+      "beverages",
+      "dairy",
+      "bakery",
+      "spices"
+    ],
+    "surcharge_exempt": [
+      "spices",
+      "beverages"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Veterans Day",
+    "month": 11,
+    "day": 11,
+    "date_hint": "2026-11-11",
+    "base_lift": 1.05,
+    "categories": [
+      "beverages",
+      "snacks"
+    ],
+    "surcharge_exempt": [
+      "beverages",
+      "snacks"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Thanksgiving",
+    "month": 11,
+    "day": 26,
+    "date_hint": "2026-11-26",
+    "base_lift": 1.6,
+    "categories": [
+      "meat",
+      "dairy",
+      "bakery",
+      "produce",
+      "beverages",
+      "spices",
+      "snacks"
+    ],
+    "surcharge_exempt": [
+      "produce",
+      "spices"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Black Friday",
+    "month": 11,
+    "day": 27,
+    "date_hint": "2026-11-27",
+    "base_lift": 1.05,
+    "categories": [
+      "snacks",
+      "beverages"
+    ],
+    "surcharge_exempt": [
+      "snacks",
+      "beverages"
+    ],
+    "region": "US"
+  },
+  {
+    "name": "Cyber Monday",
+    "month": 11,
+    "day": 30,
+    "date_hint": "2026-11-30",
+    "base_lift": 1.0,
+    "categories": [],
+    "surcharge_exempt": [],
+    "region": "US"
+  },
+  {
+    "name": "Hanukkah",
+    "month": 12,
+    "day": 4,
+    "date_hint": "2026-12-04",
+    "base_lift": 1.2,
+    "categories": [
+      "dairy",
+      "sweets",
+      "bakery",
+      "produce",
+      "beverages"
+    ],
+    "surcharge_exempt": [
+      "beverages",
+      "produce"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "Christmas",
+    "month": 12,
+    "day": 25,
+    "date_hint": "2026-12-25",
+    "base_lift": 1.6,
+    "categories": [
+      "meat",
+      "dairy",
+      "bakery",
+      "beverages",
+      "snacks",
+      "sweets",
+      "produce",
+      "spices"
+    ],
+    "surcharge_exempt": [
+      "produce",
+      "spices"
+    ],
+    "region": "global"
+  },
+  {
+    "name": "New Year's Eve",
+    "month": 12,
+    "day": 31,
+    "date_hint": "2026-12-31",
+    "base_lift": 1.35,
+    "categories": [
+      "beverages",
+      "snacks",
+      "bakery",
+      "sweets",
+      "meat",
+      "dairy"
+    ],
+    "surcharge_exempt": [
+      "dairy"
+    ],
+    "region": "global"
+  }
+]

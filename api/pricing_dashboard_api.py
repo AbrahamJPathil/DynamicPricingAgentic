@@ -56,6 +56,7 @@ from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from confluent_kafka import Consumer, OFFSET_BEGINNING
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,6 +70,7 @@ from supabase import create_client
 # imports below instead of bare `import agents_registry` / `import runner`.
 # This requires scheduler/ to be an importable package (an empty __init__.py
 # in scheduler/ is enough) or to be on PYTHONPATH as a namespace package.
+from data.db.kpi_calculation import app as kpi_app, AgentState
 from scheduler.agents_registry import AGENTS
 from scheduler.runner import is_running, logger as agent_logger, run_agent
 
@@ -111,6 +113,24 @@ def _on_job_event(event) -> None:
 def _check_api_key(x_api_key: Optional[str]) -> None:
     if x_api_key != AGENT_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+async def _run_kpi_calculation() -> None:
+    """Run the KPI calculation pipeline (fetch -> calculate -> push)."""
+    agent_logger.info("KPI calculation job started")
+    initial_state: AgentState = {
+        "products": [],
+        "kpi_rows": [],
+        "errors": [],
+        "pushed_count": None,
+    }
+    try:
+        final_state = await asyncio.to_thread(kpi_app.invoke, initial_state)
+        agent_logger.info("KPI calculation finished - pushed %s rows", final_state.get("pushed_count"))
+        if final_state.get("errors"):
+            agent_logger.warning("KPI calculation errors: %s", final_state["errors"])
+    except Exception as exc:
+        agent_logger.error("KPI calculation failed: %s", exc)
 
 
 # -- Inventory agent dashboard data source -----------------------------------
@@ -333,6 +353,18 @@ async def lifespan(app: FastAPI):
             misfire_grace_time=300,
             replace_existing=True,
         )
+
+    # KPI calculation - runs every hour alongside inventory & competitor agents
+    scheduler.add_job(
+        _run_kpi_calculation,
+        trigger=CronTrigger(minute=0),
+        id="kpi_calculation",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+        replace_existing=True,
+    )
+
     scheduler.add_listener(_on_job_event, EVENT_JOB_ERROR | EVENT_JOB_EXECUTED)
     scheduler.start()
     agent_logger.info("Scheduler started. Hourly jobs registered for: %s", list(AGENTS))

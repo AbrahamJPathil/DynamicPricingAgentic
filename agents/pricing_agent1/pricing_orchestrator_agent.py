@@ -34,7 +34,7 @@ import requests
 from confluent_kafka import Consumer
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_vertexai import ChatVertexAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -425,7 +425,7 @@ def call_llm_node(state: AgentState) -> AgentState:
 
 Synthesize a single final pricing decision for this SKU."""
 
-    llm = ChatVertexAI(
+    llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         project=state["gcp_project"],
         location=os.getenv("GCP_LOCATION", "us-central1"),

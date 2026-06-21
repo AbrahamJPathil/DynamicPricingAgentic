@@ -8,7 +8,7 @@ confluent-kafka
 
 # --- AI & Orchestration (Gemini + LangGraph) ---
 langchain-core
-langchain-google-vertexai
+langchain-google-genai
 langgraph
 
 # --- Data Validation & Utilities ---

@@ -92,7 +92,7 @@ Every log record carries a `run_id` so any historical run can be fully reconstru
 **Install dependencies**
 
 ```bash
-pip install langgraph langchain-google-vertexai langchain-core pydantic
+pip install langgraph langchain-google-genai langchain-core pydantic
 ```
 
 **Prepare your inventory CSV**

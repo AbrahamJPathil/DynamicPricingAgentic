@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import requests
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_vertexai import ChatVertexAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import ValidationError
 
 from langgraph.graph import END
@@ -342,7 +342,7 @@ Loss if no action taken: ${state['loss_if_no_action']}
 
 Recommend a price modifier to clear stock before expiry."""
 
-    llm = ChatVertexAI(
+    llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         project=state["gcp_project"],
         location=os.getenv("GCP_LOCATION", "us-central1"),

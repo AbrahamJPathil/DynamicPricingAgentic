@@ -74,7 +74,7 @@ from typing import Any, List, Literal, Optional, TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_vertexai import ChatVertexAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -668,7 +668,7 @@ def call_llm_node(state: AgentState) -> AgentState:
         "decided_confidence": decision["confidence_score"],
     }, indent=2)
 
-    llm = ChatVertexAI(
+    llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         project=state["gcp_project"],
         location=os.getenv("GCP_LOCATION", "us-central1"),

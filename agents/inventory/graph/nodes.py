@@ -213,6 +213,40 @@ def skip_non_perishable_node(state: AgentState) -> AgentState:
         ),
     }
 
+    # Same shape build_output_node produces, so this entry is indistinguishable
+    # in structure from a fully-evaluated proposal once it lands in results /
+    # the inventory-detailed topic.
+    output = {
+        "agent_id": "inventory_perishability",
+        "sku_id": sku,
+        "status": "NOT_PERISHABLE",
+        "timestamp": timestamp,
+        "metrics_evaluated": {
+            "product_name": row.get("product_name", ""),
+            "category": row.get("category", ""),
+            "unit": row.get("unit", ""),
+            "stock_on_hand": int(row["stock_on_hand"]) if row.get("stock_on_hand") is not None else None,
+            "days_to_expiry": None,
+            "avg_daily_units_sold": float(row["avg_daily_units_sold"]) if row.get("avg_daily_units_sold") is not None else None,
+            "units_sold_last_24h": int(row["units_sold_last_24h"]) if row.get("units_sold_last_24h") is not None else None,
+            "units_at_risk": None,
+            "cost_price": float(row["cost_price"]) if row.get("cost_price") is not None else None,
+            "expiry_loss_rate": None,
+            "loss_if_no_action": 0.0,
+        },
+        "proposal": {
+            "suggested_action": llm["suggested_action"],
+            "price_modifier": llm["price_modifier"],
+            "confidence_score": llm["confidence_score"],
+            "urgency": llm["urgency"],
+        },
+        "justification": {
+            "headline": llm["headline"],
+            "detailed_reasoning": llm["detailed_reasoning"],
+        },
+    }
+    state["results"].append(output)
+
     _write_log(
         {
             "log_type": "PROPOSAL",
@@ -302,6 +336,40 @@ def skip_no_risk_node(state: AgentState) -> AgentState:
             f"days to expiry leaves no units at risk, so the price is held."
         ),
     }
+
+    # Same shape build_output_node produces, so this entry is indistinguishable
+    # in structure from a fully-evaluated proposal once it lands in results /
+    # the inventory-detailed topic.
+    output = {
+        "agent_id": "inventory_perishability",
+        "sku_id": sku,
+        "status": "NO_ACTION_NEEDED",
+        "timestamp": timestamp,
+        "metrics_evaluated": {
+            "product_name": row["product_name"],
+            "category": row["category"],
+            "unit": row["unit"],
+            "stock_on_hand": int(row["stock_on_hand"]),
+            "days_to_expiry": state["days_to_expiry"],
+            "avg_daily_units_sold": float(row["avg_daily_units_sold"]),
+            "units_sold_last_24h": int(row["units_sold_last_24h"]),
+            "units_at_risk": state["units_at_risk"],
+            "cost_price": float(row["cost_price"]),
+            "expiry_loss_rate": None,
+            "loss_if_no_action": 0.0,
+        },
+        "proposal": {
+            "suggested_action": llm["suggested_action"],
+            "price_modifier": llm["price_modifier"],
+            "confidence_score": llm["confidence_score"],
+            "urgency": llm["urgency"],
+        },
+        "justification": {
+            "headline": llm["headline"],
+            "detailed_reasoning": llm["detailed_reasoning"],
+        },
+    }
+    state["results"].append(output)
 
     _write_log(
         {

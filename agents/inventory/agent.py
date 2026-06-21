@@ -24,7 +24,12 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from kafka_publisher import publish_detailed, publish_proposal, flush as kafka_flush
+from kafka_publisher import (
+    flush as kafka_flush,
+    publish_detailed,
+    publish_fall_reasoning,
+    publish_proposal,
+)
 
 # -- Audit log paths ------------------------------------------------------------
 PROPOSAL_LOG = "proposals.jsonl"
@@ -776,27 +781,28 @@ Recommend a price modifier to clear stock before expiry."""
         )
 
     # -- Write validation log ---------------------------------------------------
-    _write_log(
-        {
-            "log_type": "VALIDATION",
-            "run_id": state["run_id"],
-            "sku_id": sku,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "validation_passed": not fallback_used,
-            "fallback_triggered": fallback_used,
-            "failure_reason": failure_reason,
-            "model": "gemini-2.5-flash",
-            "temperature": 0.2,
-            "tokens": {
-                "prompt": prompt_tokens,
-                "completion": completion_tokens,
-                "total": total_tokens,
-                "cached": cached_tokens,
-            },
-            "estimated_cost_usd": est_cost,
+    validation_record = {
+        "log_type": "VALIDATION",
+        "run_id": state["run_id"],
+        "sku_id": sku,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "validation_passed": not fallback_used,
+        "fallback_triggered": fallback_used,
+        "failure_reason": failure_reason,
+        "model": "gemini-2.5-flash",
+        "temperature": 0.2,
+        "tokens": {
+            "prompt": prompt_tokens,
+            "completion": completion_tokens,
+            "total": total_tokens,
+            "cached": cached_tokens,
         },
-        VALIDATION_LOG,
-    )
+        "estimated_cost_usd": est_cost,
+    }
+    _write_log(validation_record, VALIDATION_LOG)
+
+    if fallback_used:
+        publish_fall_reasoning(validation_record, key=sku)
 
     return state
 

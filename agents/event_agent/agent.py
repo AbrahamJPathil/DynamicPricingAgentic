@@ -22,14 +22,27 @@ Rewritten to match the Inventory agent's architecture and unified contract:
     cwd). These are distinct from the Supabase event_proposals TABLE below -
     one's a local file, one's a remote table, deliberately not given the
     identical name.
-  - Every proposal is published to BOTH:
-      1. Kafka, on the "event-agent" topic (kafka_publisher.py)
-      2. Supabase, as a row in the "event_proposals" table (supabase_client.py)
-    using the SAME external contract as the inventory agent
-    (agent_id / sku / recommendation{action, suggested_modifier, confidence} /
-    rationale), built once and validated once (build_proposal_payload), then
-    published to each transport independently - if one fails (broker down,
-    Supabase unreachable), the other still goes through.
+  - Every proposal is published to FOUR places:
+      1. Kafka, on the "event-agent" topic (kafka_publisher.py) - the slim
+         external contract.
+      2. Supabase, as a row in the "event_proposals" table
+         (supabase_client.py) - same slim external contract.
+      3. Kafka, on the "calendar-detailed" topic (kafka_publisher.py) - the
+         FULL internal `output` dict (metrics_evaluated + proposal +
+         justification), for consumers that want everything this agent
+         computed for the SKU rather than just the cross-agent shape.
+      4. Kafka, on the "calendar-agent" topic (kafka_publisher.py) - the
+         SAME slim payload as (1), republished under this agent's own
+         topic name for consumers that want this agent's proposals
+         specifically rather than the shared cross-agent "event-agent"
+         stream.
+    The slim contract used for (1), (2), and (4) is the SAME shape as the
+    inventory agent (agent_id / sku / recommendation{action,
+    suggested_modifier, confidence} / rationale), built once and validated
+    once (build_proposal_payload), then published to each destination
+    independently - if one fails (broker down, Supabase unreachable), the
+    others still go through. (3) is published separately, straight from the
+    `output` dict, with no dependency on that schema's validation passing.
     HOLD_EXEMPT collapses to HOLD on the wire; the exemption itself stays
     visible in metrics_evaluated.surcharge_exempt_triggered for audit/UI use.
   - The product catalog is fetched from Supabase's products_sku table
@@ -796,6 +809,21 @@ def build_output_node(state: AgentState) -> AgentState:
         "fallback_used": is_fallback,
     }, PROPOSAL_LOG)
 
+    # -- Publish the FULL detailed JSON (metrics_evaluated + proposal +
+    # justification, i.e. the same `output` dict appended to state["results"]
+    # above) to its own "calendar-detailed" Kafka topic. This is deliberately
+    # separate from the slim agent_id/sku/recommendation/rationale contract
+    # published below: that one is the cross-agent shape every consumer must
+    # be able to parse identically, this one is the full internal picture for
+    # this agent specifically (debugging, analytics, audit UIs, etc). Guarded
+    # independently so a failure here never blocks the slim-contract
+    # publish/insert that follows.
+    try:
+        kafka_publish(output, key=row["sku_id"], topic="calendar-detailed")
+    except Exception as e:
+        print(f"[build_output] [{row['sku_id']}] [WARNING]  Kafka publish "
+              f"(calendar-detailed) failed: {e}")
+
     # -- Build the validated external payload ONCE - shared by both transports.
     # If it fails schema validation, neither Kafka nor Supabase gets it.
     try:
@@ -822,6 +850,18 @@ def build_output_node(state: AgentState) -> AgentState:
             insert_proposal(proposal_payload, key=row["sku_id"])
         except Exception as e:
             print(f"[build_output] [{row['sku_id']}] [WARNING]  Supabase insert failed: {e}")
+
+        # -- Publish the SAME concise payload to the "calendar-agent" topic
+        # too - identical agent_id/sku/recommendation/rationale shape as the
+        # "event-agent" publish above, just under a second topic name for
+        # consumers that key off this agent specifically rather than the
+        # shared cross-agent "event-agent" topic. Guarded independently so a
+        # failure here never blocks the two publishes above.
+        try:
+            kafka_publish(proposal_payload, key=row["sku_id"], topic="calendar-agent")
+        except Exception as e:
+            print(f"[build_output] [{row['sku_id']}] [WARNING]  Kafka publish "
+                  f"(calendar-agent) failed: {e}")
 
     flag = " [FALLBACK - human review recommended]" if is_fallback else ""
     print(f"[build_output] [{row['sku_id']}] Proposal ready{flag}")

@@ -78,7 +78,7 @@ from scheduler.runner import is_running, logger as agent_logger, run_agent
 
 # -- Kafka config -----------------------------------------------------------
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-TOPICS = ["inventory-agent", "competitor-agent", "final-prices", "inventory-detailed", "competitor-detailed"]
+TOPICS = ["inventory-agent", "competitor-agent", "calendar-agent", "final-prices", "inventory-detailed", "competitor-detailed"]
 CONSUMER_GROUP_ID = "pricing_dashboard_api"
 HISTORY_LIMIT = 20  # entries kept per (topic, sku), for timeline/trend views
 
@@ -117,10 +117,18 @@ def _check_api_key(x_api_key: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
+KPI_LOG_DIR = Path(__file__).resolve().parent / "logs"
+KPI_LOG_DIR.mkdir(exist_ok=True)
+
+
 async def _run_kpi_calculation() -> None:
-    """Run the KPI calculation script as a subprocess."""
+    """Run the KPI calculation script as a subprocess, logging to file."""
     script_path = str(Path(__file__).resolve().parent.parent / "data" / "db" / "kpi_calculation.py")
-    agent_logger.info("KPI calculation job started")
+    log_file = KPI_LOG_DIR / "kpi_calculation.log"
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    started = time.monotonic()
+    agent_logger.info("KPI calculation job started (%s)", script_path)
+
     try:
         result = await asyncio.to_thread(
             subprocess.run,
@@ -129,16 +137,27 @@ async def _run_kpi_calculation() -> None:
             text=True,
             timeout=5 * 60,
         )
-        if result.returncode == 0:
-            agent_logger.info("KPI calculation finished")
-        else:
-            agent_logger.error("KPI calculation exited with code %s", result.returncode)
-            if result.stderr:
-                agent_logger.error("KPI calculation stderr: %s", result.stderr.strip())
     except subprocess.TimeoutExpired:
         agent_logger.error("KPI calculation timed out")
-    except Exception as exc:
-        agent_logger.error("KPI calculation failed: %s", exc)
+        with open(log_file, "a") as f:
+            f.write(f"\n--- {timestamp}: TIMEOUT after 5m ---\n")
+        return
+
+    duration = time.monotonic() - started
+    with open(log_file, "a") as f:
+        f.write(f"\n--- {timestamp} ({duration:.1f}s, exit={result.returncode}) ---\n")
+        if result.stdout:
+            f.write(result.stdout)
+        if result.stderr:
+            f.write("\n[stderr]\n" + result.stderr)
+
+    if result.returncode == 0:
+        agent_logger.info("KPI calculation finished successfully in %.1fs", duration)
+    else:
+        agent_logger.error(
+            "KPI calculation exited with code %s -- see %s",
+            result.returncode, log_file,
+        )
 
 
 # -- Inventory agent dashboard data source -----------------------------------
@@ -188,6 +207,7 @@ class SKUDetail(BaseModel):
     sku: str
     inventory: Optional[dict] = None
     competitor: Optional[dict] = None
+    calendar: Optional[dict] = None
     final_price: Optional[dict] = None
 
 
@@ -372,6 +392,7 @@ async def lifespan(app: FastAPI):
         misfire_grace_time=120,
         replace_existing=True,
     )
+    agent_logger.info("KPI calculation job registered — runs on the hour every hour")
 
     scheduler.add_listener(_on_job_event, EVENT_JOB_ERROR | EVENT_JOB_EXECUTED)
     scheduler.start()
@@ -655,13 +676,17 @@ def list_skus():
 def get_sku_detail(sku: str):
     with _lock:
         if sku not in (
-            set(_latest["inventory-agent"]) | set(_latest["competitor-agent"]) | set(_latest["final-prices"])
+            set(_latest["inventory-agent"])
+            | set(_latest["competitor-agent"])
+            | set(_latest["calendar-agent"])
+            | set(_latest["final-prices"])
         ):
             raise HTTPException(status_code=404, detail=f"No data yet for sku={sku}")
         return SKUDetail(
             sku=sku,
             inventory=_latest["inventory-agent"].get(sku),
             competitor=_latest["competitor-agent"].get(sku),
+            calendar=_latest["calendar-agent"].get(sku),
             final_price=_latest["final-prices"].get(sku),
         )
 

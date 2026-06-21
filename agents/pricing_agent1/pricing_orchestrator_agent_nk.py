@@ -26,7 +26,7 @@ from typing import Dict, Literal, Optional, TypedDict
 # from confluent_kafka import Consumer  # Kafka disabled - no broker on this machine
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -308,7 +308,7 @@ def _format_source(label: str, data: Optional[dict]) -> str:
 # -- Shared state (one invocation per incoming Kafka message) -------------------
 class AgentState(TypedDict):
     sku: str
-    api_key: str
+    gcp_project: str
     inventory_data: Optional[dict]   # latest known inventory-agent message for this SKU, or None
     competitor_data: Optional[dict]  # latest known competitor-agent message for this SKU, or None
     llm_response: Optional[dict]
@@ -333,9 +333,10 @@ def call_llm_node(state: AgentState) -> AgentState:
 
 Synthesize a single final pricing decision for this SKU."""
 
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatVertexAI(
         model="gemini-2.5-flash",
-        google_api_key=state["api_key"],
+        project=state["gcp_project"],
+        location=os.getenv("GCP_LOCATION", "us-central1"),
         temperature=0.2,
     )
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
@@ -431,12 +432,13 @@ def build_graph() -> StateGraph:
 # -- Entry point: local mock-topic replay (Kafka consumer disabled) --------------
 def main():
     load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    gcp_project = os.getenv("GCP_PROJECT_ID")
+    if not gcp_project:
         raise EnvironmentError(
-            "GEMINI_API_KEY not found in environment. "
+            "GCP_PROJECT_ID not found in environment. "
             "Ensure a .env file exists at the project root with:\n"
-            "  GEMINI_API_KEY=your_key_here"
+            "  GCP_PROJECT_ID=your-gcp-project-id\n"
+            "Also set GOOGLE_APPLICATION_CREDENTIALS to point to your service account key JSON file."
         )
 
     # consumer = Consumer({                                              # Kafka disabled
@@ -499,7 +501,7 @@ def main():
 
         initial_state: AgentState = {
             "sku": sku,
-            "api_key": api_key,
+            "gcp_project": gcp_project,
             "inventory_data": sources.get("inventory_perishability"),
             "competitor_data": sources.get("competitor_pricing"),
             "llm_response": None,

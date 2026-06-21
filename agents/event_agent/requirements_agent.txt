@@ -1,7 +1,7 @@
 pandas
 python-dotenv
 langchain-core
-langchain-google-genai
+langchain-google-vertexai
 langgraph
 pydantic
 holidays

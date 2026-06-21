@@ -25,12 +25,13 @@ from kafka_publisher import flush as kafka_flush, publish_detailed
 
 def main():
     load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    gcp_project = os.getenv("GCP_PROJECT_ID")
+    if not gcp_project:
         raise EnvironmentError(
-            "GEMINI_API_KEY not found in environment. "
+            "GCP_PROJECT_ID not found in environment. "
             "Ensure a .env file exists at the project root with:\n"
-            "  GEMINI_API_KEY=your_key_here"
+            "  GCP_PROJECT_ID=your-gcp-project-id\n"
+            "Also set GOOGLE_APPLICATION_CREDENTIALS to point to your service account key JSON file."
         )
 
     app = build_graph()
@@ -38,7 +39,7 @@ def main():
     print(f"\n[main] Starting run  run_id={run_id}")
 
     initial_state: AgentState = {
-        "api_key": api_key,
+        "gcp_project": gcp_project,
         "run_id": run_id,
         "rows": [],
         "current_row": None,

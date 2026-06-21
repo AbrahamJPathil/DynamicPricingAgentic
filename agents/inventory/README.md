@@ -92,7 +92,7 @@ Every log record carries a `run_id` so any historical run can be fully reconstru
 **Install dependencies**
 
 ```bash
-pip install langgraph langchain-google-genai langchain-core pydantic
+pip install langgraph langchain-google-vertexai langchain-core pydantic
 ```
 
 **Prepare your inventory CSV**
@@ -102,7 +102,7 @@ Name the file `products.csv` and ensure it contains the columns listed in the sc
 **Run the agent**
 
 ```bash
-python inventory_agent.py --api-key YOUR_GEMINI_API_KEY --csv products.csv
+python inventory_agent.py --csv products.csv
 ```
 
 Both arguments are required. `--csv` defaults to `products.csv` if omitted.

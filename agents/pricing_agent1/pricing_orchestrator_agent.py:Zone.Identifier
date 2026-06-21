@@ -1,0 +1,4 @@
+[ZoneTransfer]
+ZoneId=3
+ReferrerUrl=https://claude.ai/chat/9c560376-429e-4ec4-82e3-49622939b08f
+HostUrl=https://claude.ai/api/organizations/5c7907d2-6c03-4b23-9b52-73e18bcbf75c/conversations/9c560376-429e-4ec4-82e3-49622939b08f/wiggle/download-file?path=%2Fmnt%2Fuser-data%2Foutputs%2Fpricing_orchestrator_agent.py

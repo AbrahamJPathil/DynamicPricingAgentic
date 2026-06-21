@@ -34,7 +34,7 @@ import requests
 from confluent_kafka import Consumer
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -389,7 +389,7 @@ def _format_source(label: str, data: Optional[dict]) -> str:
 # -- Shared state (one invocation per incoming Kafka message) -------------------
 class AgentState(TypedDict):
     sku: str
-    api_key: str
+    gcp_project: str
     current_price: Optional[float]   # our_price looked up from Supabase for this sku_id
     inventory_data: Optional[dict]   # latest known inventory-agent message for this SKU, or None
     competitor_data: Optional[dict]  # latest known competitor-agent message for this SKU, or None
@@ -425,9 +425,10 @@ def call_llm_node(state: AgentState) -> AgentState:
 
 Synthesize a single final pricing decision for this SKU."""
 
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatVertexAI(
         model="gemini-2.5-flash",
-        google_api_key=state["api_key"],
+        project=state["gcp_project"],
+        location=os.getenv("GCP_LOCATION", "us-central1"),
         temperature=0.2,
     )
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
@@ -551,11 +552,11 @@ def build_graph() -> StateGraph:
 
 
 # -- Synthesis trigger (builds AgentState from the cache and runs the graph) ----
-def _run_for_sku(sku: str, app, api_key: str, sku_cache: Dict[str, Dict[str, dict]]) -> None:
+def _run_for_sku(sku: str, app, gcp_project: str, sku_cache: Dict[str, Dict[str, dict]]) -> None:
     """Invokes the graph once for a SKU using whatever is currently cached for it."""
     initial_state: AgentState = {
         "sku": sku,
-        "api_key": api_key,
+        "gcp_project": gcp_project,
         "current_price": None,
         "inventory_data": sku_cache[sku].get(INVENTORY_AGENT_ID),
         "competitor_data": sku_cache[sku].get(COMPETITOR_AGENT_ID),
@@ -568,12 +569,13 @@ def _run_for_sku(sku: str, app, api_key: str, sku_cache: Dict[str, Dict[str, dic
 # -- Entry point: long-running Kafka consumer ------------------------------------
 def main():
     load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    gcp_project = os.getenv("GCP_PROJECT_ID")
+    if not gcp_project:
         raise EnvironmentError(
-            "GEMINI_API_KEY not found in environment. "
+            "GCP_PROJECT_ID not found in environment. "
             "Ensure a .env file exists at the project root with:\n"
-            "  GEMINI_API_KEY=your_key_here"
+            "  GCP_PROJECT_ID=your-gcp-project-id\n"
+            "Also set GOOGLE_APPLICATION_CREDENTIALS to point to your service account key JSON file."
         )
 
     consumer = Consumer({
@@ -637,7 +639,7 @@ def main():
                                 # partial-data timer that was ticking for it.
                                 sku_pending_deadline.pop(sku, None)
                                 print(f"[main] [{sku}] Both agents reported - synthesizing now")
-                                _run_for_sku(sku, app, api_key, sku_cache)
+                                _run_for_sku(sku, app, gcp_project, sku_cache)
                             elif sku not in sku_pending_deadline:
                                 # Only one agent has reported so far, and we're not
                                 # already waiting on this SKU - start the grace period.
@@ -661,7 +663,7 @@ def main():
                     f"[main] [{sku}] [WARNING]  {sorted(missing)} still hasn't reported after "
                     f"{PARTIAL_DATA_WAIT_SECONDS:.0f}s - synthesizing on partial data"
                 )
-                _run_for_sku(sku, app, api_key, sku_cache)
+                _run_for_sku(sku, app, gcp_project, sku_cache)
 
     except KeyboardInterrupt:
         print("\n[main] Stopping pricing orchestrator ...")

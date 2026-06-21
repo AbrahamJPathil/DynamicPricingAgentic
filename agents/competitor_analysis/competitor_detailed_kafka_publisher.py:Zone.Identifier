@@ -1,0 +1,4 @@
+[ZoneTransfer]
+ZoneId=3
+ReferrerUrl=https://claude.ai/chat/65e070dc-21fc-4608-9dac-da40532f6ef7
+HostUrl=https://claude.ai/api/organizations/5c7907d2-6c03-4b23-9b52-73e18bcbf75c/conversations/65e070dc-21fc-4608-9dac-da40532f6ef7/wiggle/download-file?path=%2Fmnt%2Fuser-data%2Foutputs%2Fcompetitor_detailed_kafka_publisher.py

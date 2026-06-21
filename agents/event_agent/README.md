@@ -33,7 +33,7 @@ it in line with the inventory agent's architecture and Kafka contract:
    (`data/inputs/calendar-agent/calendar_data.csv` and `festival_calendar.json`
    under the project root), and `today_str` defaults to the real current UTC
    date, overridable via `CALENDAR_AGENT_TODAY=YYYY-MM-DD` for backtesting.
-5. **`GEMINI_API_KEY` is read inside `main()`**, not at module import time —
+5. **`GCP_PROJECT_ID` is read inside `main()`**, not at module import time —
    importing `build_graph` from an orchestrator no longer crashes the process
    if the env var isn't set yet.
 6. **Cost optimisation:** SKUs with no festival *and* no public holiday in
@@ -117,7 +117,8 @@ pip install -r requirements_agent.txt
 Add to your project-root `.env`:
 
 ```
-GEMINI_API_KEY=your_key_here
+GCP_PROJECT_ID=your-gcp-project-id
+GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account-key.json
 ```
 
 Run:

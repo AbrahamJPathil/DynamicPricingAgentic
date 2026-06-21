@@ -1,0 +1,6 @@
+{
+  "partitions": [
+    {"topic": "inventory-agent", "partition": 0, "offset": -1}
+  ],
+  "version": 1
+}

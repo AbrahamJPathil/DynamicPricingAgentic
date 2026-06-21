@@ -1,0 +1,17 @@
+INFO:157.51.229.192:54472 - "GET /agents/competitor/skus HTTP/1.1" 200 OK
+Exception in thread Thread-1 (_consume_loop):
+Traceback (most recent call last):
+File "/usr/lib/python3.14/threading.py", line 1082, in _bootstrap_inner
+self._context.run(self.run)
+ ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+ File "/usr/lib/python3.14/threading.py", line 1024, in run
+  self._target(*self._args, **self._kwargs)
+  ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ File "/home/voidknight2004/DynamicPricingAgentic/api/pricing_dashboard_api.py", line 217, in _consume_loop
+  _ingest(msg.topic(), payload, received_at)
+  ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ File "/home/voidknight2004/DynamicPricingAgentic/api/pricing_dashboard_api.py", line 171, in _ingest
+  sku = payload.get("sku") or payload.get("sku_id", "UNKNOWN")
+     ^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'get'
+INFO:  157.51.229.192:54482 - "GET /agents/competitor/MEA001 HTTP/1.1" 404 Not Found

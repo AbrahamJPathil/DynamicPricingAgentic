@@ -44,7 +44,7 @@ Rewritten to match the Inventory agent's architecture and unified contract:
   - today_str now defaults to the real current UTC date (overridable via the
     CALENDAR_AGENT_TODAY env var for backtesting), instead of being
     hardcoded to one specific date.
-  - GEMINI_API_KEY is read inside main() instead of at import time, so
+  - GCP_PROJECT_ID is read inside main() instead of at import time, so
     importing build_graph() (e.g. from an orchestrator) no longer crashes
     the process if the env var isn't set yet.
   - The festival calendar and the `holidays` library's calendar are loaded
@@ -74,7 +74,7 @@ from typing import Any, List, Literal, Optional, TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -351,7 +351,7 @@ def fallback_justification(state: "AgentState") -> dict:
 class AgentState(TypedDict):
     # inputs
     festival_json_path: str
-    api_key: str
+    gcp_project: str
     run_id: str
     today_str: str
     # loaded once in load_catalog_node
@@ -668,9 +668,10 @@ def call_llm_node(state: AgentState) -> AgentState:
         "decided_confidence": decision["confidence_score"],
     }, indent=2)
 
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatVertexAI(
         model="gemini-2.5-flash",
-        google_api_key=state["api_key"],
+        project=state["gcp_project"],
+        location=os.getenv("GCP_LOCATION", "us-central1"),
         temperature=0.2,
     )
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_payload)]
@@ -892,12 +893,13 @@ def build_graph() -> StateGraph:
 # -- Entry point --------------------------------------------------------------------------------
 def main():
     load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    gcp_project = os.getenv("GCP_PROJECT_ID")
+    if not gcp_project:
         raise EnvironmentError(
-            "GEMINI_API_KEY not found in environment. "
+            "GCP_PROJECT_ID not found in environment. "
             "Ensure a .env file exists at the project root with:\n"
-            "  GEMINI_API_KEY=your_key_here"
+            "  GCP_PROJECT_ID=your-gcp-project-id\n"
+            "Also set GOOGLE_APPLICATION_CREDENTIALS to point to your service account key JSON file."
         )
 
     # -- Hardcoded festival path relative to this file, mirroring the inventory
@@ -924,7 +926,7 @@ def main():
 
     initial_state: AgentState = {
         "festival_json_path": str(festival_json_path),
-        "api_key": api_key,
+        "gcp_project": gcp_project,
         "run_id": run_id,
         "today_str": today_str,
         "rows": [],

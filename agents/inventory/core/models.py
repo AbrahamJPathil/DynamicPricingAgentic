@@ -100,7 +100,7 @@ class KafkaProposal(BaseModel):
 
 class AgentState(TypedDict):
     # inputs
-    api_key: str
+    gcp_project: str
     # run identifier - shared across all log records in one pipeline execution
     run_id: str
     # populated by load_csv_node

@@ -45,11 +45,14 @@ Interactive API docs once running: http://localhost:8000/docs
 import asyncio
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Deque, Dict, List, Optional
 
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -70,7 +73,6 @@ from supabase import create_client
 # imports below instead of bare `import agents_registry` / `import runner`.
 # This requires scheduler/ to be an importable package (an empty __init__.py
 # in scheduler/ is enough) or to be on PYTHONPATH as a namespace package.
-from data.db.kpi_calculation import app as kpi_app, AgentState
 from scheduler.agents_registry import AGENTS
 from scheduler.runner import is_running, logger as agent_logger, run_agent
 
@@ -116,19 +118,25 @@ def _check_api_key(x_api_key: Optional[str]) -> None:
 
 
 async def _run_kpi_calculation() -> None:
-    """Run the KPI calculation pipeline (fetch -> calculate -> push)."""
+    """Run the KPI calculation script as a subprocess."""
+    script_path = str(Path(__file__).resolve().parent.parent / "data" / "db" / "kpi_calculation.py")
     agent_logger.info("KPI calculation job started")
-    initial_state: AgentState = {
-        "products": [],
-        "kpi_rows": [],
-        "errors": [],
-        "pushed_count": None,
-    }
     try:
-        final_state = await asyncio.to_thread(kpi_app.invoke, initial_state)
-        agent_logger.info("KPI calculation finished - pushed %s rows", final_state.get("pushed_count"))
-        if final_state.get("errors"):
-            agent_logger.warning("KPI calculation errors: %s", final_state["errors"])
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=5 * 60,
+        )
+        if result.returncode == 0:
+            agent_logger.info("KPI calculation finished")
+        else:
+            agent_logger.error("KPI calculation exited with code %s", result.returncode)
+            if result.stderr:
+                agent_logger.error("KPI calculation stderr: %s", result.stderr.strip())
+    except subprocess.TimeoutExpired:
+        agent_logger.error("KPI calculation timed out")
     except Exception as exc:
         agent_logger.error("KPI calculation failed: %s", exc)
 

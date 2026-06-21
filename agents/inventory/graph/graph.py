@@ -9,6 +9,7 @@ from graph.nodes import (
     load_csv_node,
     sort_by_urgency_node,
     check_perishable_node,
+    skip_non_perishable_node,
     compute_expiry_node,
     skip_no_risk_node,
     compute_loss_node,
@@ -28,6 +29,7 @@ def build_graph() -> StateGraph:
     graph.add_node("load_csv", load_csv_node)
     graph.add_node("sort_by_urgency", sort_by_urgency_node)
     graph.add_node("check_perishable", check_perishable_node)
+    graph.add_node("skip_non_perishable", skip_non_perishable_node)
     graph.add_node("compute_expiry", compute_expiry_node)
     graph.add_node("skip_no_risk", skip_no_risk_node)
     graph.add_node("compute_loss", compute_loss_node)
@@ -43,8 +45,10 @@ def build_graph() -> StateGraph:
     graph.add_conditional_edges(
         "check_perishable",
         route_perishable,
-        {"compute_expiry": "compute_expiry", "advance_row": "advance_row"},
+        {"compute_expiry": "compute_expiry", "skip_non_perishable": "skip_non_perishable"},
     )
+
+    graph.add_edge("skip_non_perishable", "advance_row")
 
     graph.add_conditional_edges(
         "compute_expiry",

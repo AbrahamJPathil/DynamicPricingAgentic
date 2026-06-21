@@ -189,6 +189,69 @@ def check_perishable_node(state: AgentState) -> AgentState:
     return state
 
 
+def skip_non_perishable_node(state: AgentState) -> AgentState:
+    """
+    Reached when is_perishable is False - there is no expiry to compute and
+    no pricing action is needed. No LLM call is made, but a deterministic
+    HOLD message is still published to Kafka so every SKU in the run has a
+    record on the topic, not just the perishable ones that made it past
+    check_perishable.
+    """
+    row = state["current_row"]
+    sku = row.get("sku_id", "UNKNOWN")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    llm = {
+        "suggested_action": "HOLD",
+        "price_modifier": 1.0,
+        "confidence_score": 1.0,
+        "urgency": "MEDIUM",
+        "headline": "No action needed - SKU is not perishable",
+        "detailed_reasoning": (
+            f"{sku} is flagged is_perishable=False, so there is no expiry "
+            f"risk to evaluate and the price is held."
+        ),
+    }
+
+    _write_log(
+        {
+            "log_type": "PROPOSAL",
+            "run_id": state["run_id"],
+            "sku_id": sku,
+            "timestamp": timestamp,
+            "status": "NOT_PERISHABLE",
+            "urgency": llm["urgency"],
+            "suggested_action": llm["suggested_action"],
+            "price_modifier": llm["price_modifier"],
+            "confidence_score": llm["confidence_score"],
+            "loss_if_no_action": 0.0,
+            "units_at_risk": None,
+            "days_to_expiry": None,
+            "recovery_floor": round(
+                float(row.get("producer_buyback_rate", 0.0) or 0.0)
+                + float(row.get("repurposing_recovery_rate", 0.0) or 0.0),
+                4,
+            ),
+            "fallback_used": False,
+        },
+        PROPOSAL_LOG,
+    )
+
+    try:
+        kafka_payload = build_kafka_payload(row, llm, "inventory_perishability")
+        publish_proposal(kafka_payload, key=sku)
+    except ValidationError as e:
+        print(
+            f"[skip_non_perishable] [{sku}] [WARNING]  "
+            f"Kafka payload failed schema validation - not published"
+        )
+        for error in e.errors():
+            print(f"  field={error['loc']}  msg={error['msg']}")
+
+    print(f"[skip_non_perishable] [{sku}] Not perishable - HOLD published, no LLM call made")
+    return state
+
+
 def compute_expiry_node(state: AgentState) -> AgentState:
     """
     Computes days_to_expiry and units_at_risk from the current row.
@@ -517,7 +580,7 @@ def advance_row_node(state: AgentState) -> AgentState:
 
 
 def route_perishable(state: AgentState) -> str:
-    return "compute_expiry" if state["is_perishable"] else "advance_row"
+    return "compute_expiry" if state["is_perishable"] else "skip_non_perishable"
 
 
 def route_units_at_risk(state: AgentState) -> str:

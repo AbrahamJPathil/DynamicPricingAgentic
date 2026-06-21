@@ -1,0 +1,29 @@
+[
+  {
+    "agent_id": "social_trends_pricing",
+    "sku": "MEA001",
+    "confidence": 0.0,
+    "recommendation": {
+      "suggested_modifier": 0.0
+    },
+    "rationale": "FETCH_ERROR: The request failed: Google returned a response with code 429"
+  },
+  {
+    "agent_id": "social_trends_pricing",
+    "sku": "MEA002",
+    "confidence": 0.15,
+    "recommendation": {
+      "suggested_modifier": 0.0
+    },
+    "rationale": "Search interest is too sparse in the early window to compute a reliable trend \u2014 defaulting to no price change until more data is available."
+  },
+  {
+    "agent_id": "social_trends_pricing",
+    "sku": "DAI001",
+    "confidence": 0.0,
+    "recommendation": {
+      "suggested_modifier": 0.0
+    },
+    "rationale": "FETCH_ERROR: The request failed: Google returned a response with code 429"
+  }
+]

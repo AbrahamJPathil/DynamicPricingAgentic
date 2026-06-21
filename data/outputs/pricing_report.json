@@ -1,0 +1,40 @@
+[
+  {
+    "agent_id": "competitor_pricing",
+    "status": "COMPLETED",
+    "timestamp": "2026-06-18T17:28:07Z",
+    "metrics_evaluated": {
+      "sku": "MEA002",
+      "our_current_price": 7.2,
+      "competitor_price": 7.99
+    },
+    "proposal": {
+      "suggested_action": "SURCHARGE",
+      "price_modifier": 1.1097,
+      "confidence_score": 0.7
+    },
+    "justification": {
+      "headline": "Margin Expansion Opportunity",
+      "detailed_reasoning": "Kroger prices ($7.99) are higher than ours ($7.20) by 9.9%. A 11.0% surcharge captures margin while remaining competitive."
+    }
+  },
+  {
+    "agent_id": "competitor_pricing",
+    "status": "COMPLETED",
+    "timestamp": "2026-06-18T17:28:07Z",
+    "metrics_evaluated": {
+      "sku": "MEA001",
+      "our_current_price": 11.0,
+      "competitor_price": 9.99
+    },
+    "proposal": {
+      "suggested_action": "DISCOUNT",
+      "price_modifier": 0.9082,
+      "confidence_score": 0.8
+    },
+    "justification": {
+      "headline": "Competitive Pressure Detected",
+      "detailed_reasoning": "Our price ($11.00) exceeds Kroger's ($9.99) by 10.1%. Applying a 9.2% discount brings us level with the competitor and protects market share."
+    }
+  }
+]

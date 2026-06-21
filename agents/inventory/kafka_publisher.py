@@ -21,6 +21,7 @@ from confluent_kafka import Producer
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 TOPIC = "inventory-agent"
 TOPIC_DETAILED = "inventory-detailed"
+TOPIC_FALL_REASONING = "inventory-fall-reasoning"
 
 _producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
@@ -58,6 +59,20 @@ def publish_detailed(payload: dict, key: Optional[str] = None) -> None:
     """
     _producer.produce(
         topic=TOPIC_DETAILED,
+        key=key.encode("utf-8") if key else None,
+        value=json.dumps(payload).encode("utf-8"),
+        callback=_delivery_report,
+    )
+    _producer.poll(0)
+
+
+def publish_fall_reasoning(payload: dict, key: Optional[str] = None) -> None:
+    """
+    Serializes payload to JSON and produces it onto the inventory-fall-reasoning topic.
+    Non-blocking - message is buffered and sent asynchronously.
+    """
+    _producer.produce(
+        topic=TOPIC_FALL_REASONING,
         key=key.encode("utf-8") if key else None,
         value=json.dumps(payload).encode("utf-8"),
         callback=_delivery_report,

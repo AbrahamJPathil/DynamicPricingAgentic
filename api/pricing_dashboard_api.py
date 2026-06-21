@@ -440,6 +440,113 @@ def get_kpi_by_sku(sku_id: str):
             status_code=500,
             detail=str(e)
         )
+        
+# -- Customer-facing items (Supabase) -----------------------------------------
+
+
+def _clean_customer_item(item: dict) -> dict:
+    """
+    Drops old_price entirely when show_old_price is False, so the frontend
+    never has to branch on a null old_price - if the key is present, render
+    a strikethrough price; if it's absent, don't.
+    """
+    if not item.get("show_old_price"):
+        item.pop("old_price", None)
+    return item
+
+
+@app.get("/customer-items")
+def list_customer_items():
+    try:
+        response = (
+            supabase
+            .table("customer_facing_items")
+            .select("*")
+            .order("sku_id")
+            .execute()
+        )
+
+        data = [_clean_customer_item(item) for item in response.data]
+
+        return {
+            "success": True,
+            "count": len(data),
+            "data": data
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+@app.get("/customer-items/category/{item_category}")
+def list_customer_items_by_category(item_category: str):
+    try:
+        response = (
+            supabase
+            .table("customer_facing_items")
+            .select("*")
+            .eq("item_category", item_category)
+            .order("sku_id")
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No items found for category '{item_category}'"
+            )
+
+        data = [_clean_customer_item(item) for item in response.data]
+
+        return {
+            "success": True,
+            "count": len(data),
+            "data": data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+@app.get("/customer-items/{sku_id}")
+def get_customer_item_by_sku(sku_id: str):
+    try:
+        response = (
+            supabase
+            .table("customer_facing_items")
+            .select("*")
+            .eq("sku_id", sku_id)
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No item found for sku_id '{sku_id}'"
+            )
+
+        return {
+            "success": True,
+            "data": _clean_customer_item(response.data[0])
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+        
+        
 # -- Agent scheduler endpoints --------------------------------------------------
 # Folded in from the standalone scheduler service (scheduler/main.py).
 @app.post("/agents/{agent_name}/rerun")

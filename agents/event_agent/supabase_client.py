@@ -61,7 +61,7 @@ from supabase import create_client, Client
 load_dotenv()
 
 _SUPABASE_URL = os.getenv("SUPABASE_URL")
-_SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+_SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 if not _SUPABASE_URL or not _SUPABASE_KEY:
     raise EnvironmentError(

@@ -13,5 +13,5 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 AGENTS = {
     "inventory": str(BASE_DIR / "agents" / "inventory" / "agent.py"),
-    "competitor": str(BASE_DIR / "agents" / "competitor" / "agent.py"),
+    "competitor": str(BASE_DIR / "agents" / "competitor_analysis" / "agent.py"),
 }

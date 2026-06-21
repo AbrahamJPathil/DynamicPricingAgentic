@@ -10,7 +10,7 @@ a SKU, it re-synthesizes a single final pricing decision for that SKU and
 publishes it to the "final-prices" topic.
 
 Graph nodes (run once per incoming Kafka message):
-    call_llm -> build_output -> END
+    fetch_price -> call_llm -> build_output -> update_price -> END
 
 Run (as a standing service, in its own terminal):
     python pricing_orchestrator_agent.py
@@ -23,6 +23,7 @@ import os
 from datetime import datetime, timezone
 from typing import Dict, Literal, Optional, TypedDict
 
+import requests
 from confluent_kafka import Consumer
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -38,6 +39,11 @@ KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 SOURCE_TOPICS = ["inventory-agent", "competitor-agent"]
 CONSUMER_GROUP_ID = "pricing_orchestrator"
 
+# -- Supabase config ----------------------------------------------------------
+SUPABASE_TABLE = "products_sku"
+SKU_COLUMN = "sku_id"
+PRICE_COLUMN = "our_price"
+
 # -- Audit log ----------------------------------------------------------------
 FINAL_LOG = "final_prices.jsonl"
 
@@ -46,6 +52,91 @@ def _write_log(record: dict, path: str) -> None:
     """Appends a single JSON record to a JSONL audit file."""
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")
+
+
+# -- Supabase price lookup/update ------------------------------------------------
+def _get_supabase_config() -> tuple[str, str]:
+    """Reads Supabase connection details from the environment, mirroring load_csv_node's approach."""
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    if not supabase_url or not supabase_key:
+        raise EnvironmentError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment")
+    return supabase_url.rstrip("/"), supabase_key
+
+
+def _supabase_headers(supabase_key: str, *, writing: bool = False) -> dict:
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Accept": "application/json",
+    }
+    if writing:
+        headers["Content-Type"] = "application/json"
+        headers["Prefer"] = "return=minimal"
+    return headers
+
+
+def _fetch_current_price(sku: str) -> Optional[float]:
+    """Looks up our_price for this sku_id from the products_sku Supabase table."""
+    try:
+        supabase_url, supabase_key = _get_supabase_config()
+    except EnvironmentError as exc:
+        print(f"[fetch_price] [{sku}] {exc}")
+        return None
+
+    url = f"{supabase_url}/rest/v1/{SUPABASE_TABLE}"
+    params = {"select": PRICE_COLUMN, SKU_COLUMN: f"eq.{sku}"}
+
+    try:
+        # NOTE: verify=False (mirrors load_csv_node) skips TLS certificate
+        # verification - fine against a local/dev Supabase instance, but
+        # should be removed (or set verify=True) against production.
+        resp = requests.get(url, headers=_supabase_headers(supabase_key), params=params, timeout=10, verify=False)
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception as exc:
+        print(f"[fetch_price] [{sku}] Failed to fetch {PRICE_COLUMN} from Supabase: {exc}")
+        return None
+
+    if not rows:
+        print(f"[fetch_price] [{sku}] No row found in {SUPABASE_TABLE} where {SKU_COLUMN}={sku}")
+        return None
+
+    try:
+        return float(rows[0][PRICE_COLUMN])
+    except (KeyError, TypeError, ValueError) as exc:
+        print(f"[fetch_price] [{sku}] {PRICE_COLUMN} missing/invalid on matched row: {exc}")
+        return None
+
+
+def _update_price(sku: str, new_price: float) -> bool:
+    """Writes new_price back to the our_price column for this sku_id in Supabase."""
+    try:
+        supabase_url, supabase_key = _get_supabase_config()
+    except EnvironmentError as exc:
+        print(f"[update_price] [{sku}] {exc}")
+        return False
+
+    url = f"{supabase_url}/rest/v1/{SUPABASE_TABLE}"
+    params = {SKU_COLUMN: f"eq.{sku}"}
+    body = {PRICE_COLUMN: new_price}
+
+    try:
+        resp = requests.patch(
+            url,
+            headers=_supabase_headers(supabase_key, writing=True),
+            params=params,
+            json=body,
+            timeout=10,
+            verify=False,
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        print(f"[update_price] [{sku}] Failed to update {PRICE_COLUMN} in Supabase: {exc}")
+        return False
+
+    print(f"[update_price] [{sku}] {PRICE_COLUMN} updated to {new_price}")
+    return True
 
 
 # -- Decision history (read from the same JSONL audit log build_output_node writes to) --
@@ -282,13 +373,24 @@ def _format_source(label: str, data: Optional[dict]) -> str:
 class AgentState(TypedDict):
     sku: str
     api_key: str
+    current_price: Optional[float]   # our_price looked up from Supabase for this sku_id
     inventory_data: Optional[dict]   # latest known inventory-agent message for this SKU, or None
     competitor_data: Optional[dict]  # latest known competitor-agent message for this SKU, or None
     llm_response: Optional[dict]
     final_output: Optional[dict]
 
 
-# -- Node 1: call_llm -------------------------------------------------------------
+# -- Node 1: fetch_price -----------------------------------------------------------
+def fetch_price_node(state: AgentState) -> AgentState:
+    """Looks up this SKU's current our_price from Supabase before synthesis runs."""
+    sku = state["sku"]
+    state["current_price"] = _fetch_current_price(sku)
+    if state["current_price"] is not None:
+        print(f"[fetch_price] [{sku}] current {PRICE_COLUMN}={state['current_price']}")
+    return state
+
+
+# -- Node 2: call_llm -------------------------------------------------------------
 def call_llm_node(state: AgentState) -> AgentState:
     """Builds the synthesis prompt from whatever upstream data is available and calls Gemini."""
     sku = state["sku"]
@@ -341,7 +443,7 @@ Synthesize a single final pricing decision for this SKU."""
     return state
 
 
-# -- Node 2: build_output ----------------------------------------------------------
+# -- Node 3: build_output ----------------------------------------------------------
 def build_output_node(state: AgentState) -> AgentState:
     """Assembles the final payload, logs it, and publishes it to the final-prices topic."""
     sku = state["sku"]
@@ -367,11 +469,20 @@ def build_output_node(state: AgentState) -> AgentState:
 
     is_fallback = llm["confidence"] == 0.0
 
+    current_price = state.get("current_price")
+    updated_price = (
+        round(current_price * (1 + llm["suggested_modifier"]), 2)
+        if current_price is not None
+        else None
+    )
+
     output = {
         "agent_id": "pricing_orchestrator",
         "sku": sku,
         "status": "FALLBACK" if is_fallback else "COMPLETED",
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "previous_price": current_price,
+        "updated_price": updated_price,
         "final_recommendation": {
             "action": llm["action"],
             "suggested_modifier": llm["suggested_modifier"],
@@ -390,14 +501,35 @@ def build_output_node(state: AgentState) -> AgentState:
     return state
 
 
+# -- Node 4: update_price ----------------------------------------------------------
+def update_price_node(state: AgentState) -> AgentState:
+    """Writes the newly computed price back to our_price in Supabase for this SKU."""
+    sku = state["sku"]
+    updated_price = state["final_output"].get("updated_price")
+
+    if updated_price is None:
+        print(
+            f"[update_price] [{sku}] [WARNING]  No current_price was available from Supabase - "
+            f"skipping {PRICE_COLUMN} update"
+        )
+        return state
+
+    _update_price(sku, updated_price)
+    return state
+
+
 # -- Build graph ----------------------------------------------------------------
 def build_graph() -> StateGraph:
     graph = StateGraph(AgentState)
+    graph.add_node("fetch_price", fetch_price_node)
     graph.add_node("call_llm", call_llm_node)
     graph.add_node("build_output", build_output_node)
-    graph.set_entry_point("call_llm")
+    graph.add_node("update_price", update_price_node)
+    graph.set_entry_point("fetch_price")
+    graph.add_edge("fetch_price", "call_llm")
     graph.add_edge("call_llm", "build_output")
-    graph.set_finish_point("build_output")
+    graph.add_edge("build_output", "update_price")
+    graph.set_finish_point("update_price")
     return graph.compile()
 
 
@@ -459,6 +591,7 @@ def main():
             initial_state: AgentState = {
                 "sku": sku,
                 "api_key": api_key,
+                "current_price": None,
                 "inventory_data": sku_cache[sku].get("inventory_perishability"),
                 "competitor_data": sku_cache[sku].get("competitor_pricing"),
                 "llm_response": None,

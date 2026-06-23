@@ -825,6 +825,8 @@ def get_inventory_detail(sku: str):
         days_to_expiry = metrics.get("days_to_expiry", 0.0)
         avg_daily_units_sold = metrics.get("avg_daily_units_sold", 0.0)
         cost_price = metrics.get("cost_price")
+        loss_if_no_action = metrics.get("loss_if_no_action", 0)
+        expiry_loss_rate = metrics.get("expiry_loss_rate")
         price_modifier = proposal.get("price_modifier", 1.0)
         risk_tier = _risk_tier(units_at_risk, stock_on_hand, days_to_expiry)
 
@@ -858,6 +860,8 @@ def get_inventory_detail(sku: str):
                 "waste_risk_tier": risk_tier,
                 "units_at_risk": units_at_risk,
                 "cost_basis_value_at_risk": round(units_at_risk * cost_price, 2) if cost_price is not None else None,
+                "expiry_loss_rate": expiry_loss_rate,
+                "loss_if_no_action": loss_if_no_action,
                 "daily_velocity": avg_daily_units_sold,
                 "units_to_clear": units_at_risk,
                 "required_velocity": required_velocity,
